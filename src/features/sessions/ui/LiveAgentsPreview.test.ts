@@ -108,7 +108,7 @@ describe("LiveAgentsPreview", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("b");
   });
 
-  it("waits for two agents, then stays open until the last one leaves", () => {
+  it("shows from the first agent until the last one leaves", () => {
     const props = {
       groupLabels: {},
       groupColors: {},
@@ -118,7 +118,7 @@ describe("LiveAgentsPreview", () => {
     const cards = () => container.querySelectorAll("[data-live-agent-card]");
 
     render({ ...props, agents: [agent("a", "/repo/a")] });
-    expect(cards()).toHaveLength(0);
+    expect(cards()).toHaveLength(1);
 
     render({
       ...props,
@@ -137,7 +137,7 @@ describe("LiveAgentsPreview", () => {
     expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
 
     render({ ...props, agents: [agent("c", "/repo/c")] });
-    expect(cards()).toHaveLength(0);
+    expect(cards()).toHaveLength(1);
   });
 
   it("keeps elapsed timers out of its live region", () => {
