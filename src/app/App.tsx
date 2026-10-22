@@ -707,6 +707,8 @@ import {
   removeArtifactCard,
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
+import type { ArtifactActions } from "../features/artifacts/artifactActions";
+import { ArtifactActionsContext } from "../features/artifacts/ui/SendToMonoDialog";
 import type { MonoChangesRequest } from "../features/monos/ui/MonoChangesView";
 import {
   claimDueAutomations,
@@ -9365,6 +9367,37 @@ function Workspace({
   const ensureOpenSessionRef = useRef(ensureOpenSession);
   ensureOpenSessionRef.current = ensureOpenSession;
 
+  /** What a Mono's interactive documents may do once the user confirms. */
+  const artifactActions = useMemo<ArtifactActions>(
+    () => ({
+      monos: () =>
+        listMonos().map((mono) => {
+          const { name, mascot, color } = monoLook(mono);
+          return { id: mono.id, name, mascot, color };
+        }),
+      sendToMono: async (monoId, message) => {
+        // A Mono not opened yet gets its chat now, as opening it would.
+        const conversation = await ensureMonoSession(monoId, {
+          home: homeDir,
+          load: ensureOpenSessionRef.current,
+          create: (path) => newDefaultSession(path),
+          add: (created) =>
+            updateSessionState(sessionsRef, setSessions, (current) => [
+              ...current,
+              created,
+            ]),
+        });
+        if (!conversation) throw new Error("That Mono is no longer available");
+        // Mid-turn it waits in the Mono's queue, as a typed message would.
+        if (!(await submitSessionRef.current(conversation.id, message)))
+          throw new Error(
+            "The Mono could not take the message right now. Try again.",
+          );
+      },
+    }),
+    [],
+  );
+
   useMobileWorkspace({
     sessions,
     defaultRuntimeMode: sessionDefaults?.runtimeMode,
@@ -14023,48 +14056,50 @@ function Workspace({
     : undefined;
   const monoOverviewPanel =
     monoViewMono && monoViewSession ? (
-      <MonoOverview
-        key={monoViewMono.id}
-        open={monoOverviewOpen}
-        monoId={monoViewMono.id}
-        cwd={monoViewSession.cwd}
-        agent={monoLook(monoViewMono)}
-        state={monoState(monoViewSession)}
-        launches={monoLaunches}
-        sessions={sessions}
-        history={history}
-        documents={monoDocuments}
-        activity={monoActivityView}
-        changes={{
-          sessionId: monoViewSession.id,
-          cwd: monoViewCwd,
-          totals: monoChangeTotals,
-          request: monoChangesRequest,
-          textHarness: monoViewSession.harness,
-          projects: monoViewMono.projects,
-        }}
-        tab={monoOverviewTab}
-        onTabChange={setMonoOverviewTab}
-        onOpenSession={(sessionId) =>
-          showMonoLaunchedSession(monoViewSession.id, sessionId)
-        }
-        shownSession={monoShownSessionView}
-        // Back lands on every session it started.
-        onBackFromSession={() => {
-          setMonoShownSession(null);
-          setMonoShownSessionFocused(false);
-        }}
-        onOpenSessionInWorkspace={onOpenMonoLaunchedSession}
-        onOpenDocument={(id) => {
-          setMonoShownSession(null);
-          setMonoOverviewDocument(id);
-        }}
-        shownDocumentId={monoOverviewDocument ?? undefined}
-        onBackFromDocument={() => setMonoOverviewDocument(null)}
-        onOpenFile={onOpenFile}
-        onClose={() => setMonoOverviewOpen(false)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
-      />
+      <ArtifactActionsContext.Provider value={artifactActions}>
+        <MonoOverview
+          key={monoViewMono.id}
+          open={monoOverviewOpen}
+          monoId={monoViewMono.id}
+          cwd={monoViewSession.cwd}
+          agent={monoLook(monoViewMono)}
+          state={monoState(monoViewSession)}
+          launches={monoLaunches}
+          sessions={sessions}
+          history={history}
+          documents={monoDocuments}
+          activity={monoActivityView}
+          changes={{
+            sessionId: monoViewSession.id,
+            cwd: monoViewCwd,
+            totals: monoChangeTotals,
+            request: monoChangesRequest,
+            textHarness: monoViewSession.harness,
+            projects: monoViewMono.projects,
+          }}
+          tab={monoOverviewTab}
+          onTabChange={setMonoOverviewTab}
+          onOpenSession={(sessionId) =>
+            showMonoLaunchedSession(monoViewSession.id, sessionId)
+          }
+          shownSession={monoShownSessionView}
+          // Back lands on every session it started.
+          onBackFromSession={() => {
+            setMonoShownSession(null);
+            setMonoShownSessionFocused(false);
+          }}
+          onOpenSessionInWorkspace={onOpenMonoLaunchedSession}
+          onOpenDocument={(id) => {
+            setMonoShownSession(null);
+            setMonoOverviewDocument(id);
+          }}
+          shownDocumentId={monoOverviewDocument ?? undefined}
+          onBackFromDocument={() => setMonoOverviewDocument(null)}
+          onOpenFile={onOpenFile}
+          onClose={() => setMonoOverviewOpen(false)}
+          windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+        />
+      </ArtifactActionsContext.Provider>
     ) : null;
   const monoSettingsDialog =
     monoCovers &&

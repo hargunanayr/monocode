@@ -1,6 +1,18 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { htmlArtifactUrl } from "../artifacts";
+import {
+  parseSendToMono,
+  resolveArtifactMono,
+  type ArtifactMono,
+} from "../artifactActions";
+import { ArtifactActionsContext, SendToMonoDialog } from "./SendToMonoDialog";
 
 type FrameTheme = { scheme: "dark" | "light"; vars: Record<string, string> };
 
@@ -77,7 +89,8 @@ const PLACEHOLDER_HEIGHT = 240;
  * An `html` artifact in a sandboxed frame. It never gets allow-same-origin,
  * so the page runs in an opaque origin with no reach into the app, and its
  * served CSP stops it fetching anything. The frame fits the page's reported
- * height, so the reader around it does the scrolling.
+ * height, so the reader around it does the scrolling. What it asks the app to
+ * do, such as sending a Mono a message, waits for the user to confirm.
  */
 export function HtmlArtifactFrame({
   id,
@@ -95,6 +108,24 @@ export function HtmlArtifactFrame({
   themeRef.current = theme;
   const [ready, setReady] = useState(false);
   const [contentHeight, setContentHeight] = useState<number | null>(null);
+  const actions = useContext(ArtifactActionsContext);
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const [sending, setSending] = useState<{
+    requestId: number;
+    mono: ArtifactMono;
+    message: string;
+  } | null>(null);
+  const sendingRef = useRef(sending);
+  sendingRef.current = sending;
+  const reply = (
+    requestId: number,
+    result: { sent: boolean; error?: string },
+  ) =>
+    frameRef.current?.contentWindow?.postMessage(
+      { type: "monocode:action-result", id: requestId, ...result },
+      "*",
+    );
   const postTheme = () =>
     frameRef.current?.contentWindow?.postMessage(
       { type: "monocode:theme", ...themeRef.current },
@@ -129,33 +160,77 @@ export function HtmlArtifactFrame({
           document.activeElement === frame
         )
           void openUrl(url).catch(() => undefined);
+      } else if (data.type === "monocode:send-to-mono") {
+        const request = parseSendToMono(data as Record<string, unknown>);
+        if (request.requestId === undefined) return;
+        const refuse = (error: string) =>
+          reply(request.requestId!, { sent: false, error });
+        if ("error" in request) return refuse(request.error);
+        // Only from a click the reader just made in this page.
+        if (document.activeElement !== frame)
+          return refuse("Sending needs a click in the page");
+        if (sendingRef.current) return refuse("Another message is waiting");
+        const host = actionsRef.current;
+        if (!host)
+          return refuse("Open this in MonoCode's main window to send it");
+        const mono = resolveArtifactMono(host.monos(), request.mono);
+        if ("error" in mono) return refuse(mono.error);
+        setSending({
+          requestId: request.requestId,
+          mono,
+          message: request.message,
+        });
       }
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, []);
+  // A reload takes the page that asked away; it learns nothing more.
+  useEffect(() => setSending(null), [version]);
   const height = contentHeight ?? PLACEHOLDER_HEIGHT;
   return (
-    <iframe
-      ref={frameRef}
-      data-html-artifact={id}
-      src={`${htmlArtifactUrl(id)}?v=${version}`}
-      title={title}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      onLoad={() => {
-        // Covers a theme change that landed while the page was loading.
-        postTheme();
-        setReady(true);
-      }}
-      // Hidden until the page has the theme, so a dark app never flashes the
-      // blank white document a frame starts with.
-      className="block w-full border-0 transition-opacity duration-150"
-      style={{
-        height,
-        opacity: ready ? 1 : 0,
-        colorScheme: ready ? theme.scheme : "light",
-      }}
-    />
+    <>
+      <iframe
+        ref={frameRef}
+        data-html-artifact={id}
+        src={`${htmlArtifactUrl(id)}?v=${version}`}
+        title={title}
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        onLoad={() => {
+          // Covers a theme change that landed while the page was loading.
+          postTheme();
+          setReady(true);
+        }}
+        // Hidden until the page has the theme, so a dark app never flashes the
+        // blank white document a frame starts with.
+        className="block w-full border-0 transition-opacity duration-150"
+        style={{
+          height,
+          opacity: ready ? 1 : 0,
+          colorScheme: ready ? theme.scheme : "light",
+        }}
+      />
+      {sending ? (
+        <SendToMonoDialog
+          mono={sending.mono}
+          message={sending.message}
+          source={title}
+          onSend={async (message) => {
+            const host = actionsRef.current;
+            if (!host) throw new Error("MonoCode cannot send from here");
+            await host.sendToMono(sending.mono.id, message);
+            reply(sending.requestId, { sent: true });
+            setSending(null);
+            frameRef.current?.focus();
+          }}
+          onClose={() => {
+            reply(sending.requestId, { sent: false });
+            setSending(null);
+            frameRef.current?.focus();
+          }}
+        />
+      ) : null}
+    </>
   );
 }
