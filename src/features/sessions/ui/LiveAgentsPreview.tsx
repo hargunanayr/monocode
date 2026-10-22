@@ -16,7 +16,6 @@ import { HarnessIcon } from "./HarnessIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { TerminalSpinner } from "./TerminalSpinner";
 
-const LIVE_AGENT_MIN = 2;
 const LIVE_AGENT_CAP = 4;
 
 type Props = {
@@ -51,12 +50,7 @@ export function LiveAgentsPreview({
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const lockList = useLockOverscroll<HTMLDivElement>();
-  // Two agents open the card; once open it stays until the last one leaves,
-  // so opening a finished session does not hide the others with it.
-  const [open, setOpen] = useState(false);
-  const shown =
-    agents.length >= LIVE_AGENT_MIN || (open && agents.length > 0);
-  if (shown !== open) setOpen(shown);
+  const shown = agents.length > 0;
   const ticking =
     shown && agents.some((agent) => !agent.done && agent.startedAt != null);
 
