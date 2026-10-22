@@ -44,6 +44,8 @@ type Exchange = {
   /** Posted by this habit on its own, with no user message before it. */
   habit?: string;
   completion?: string;
+  /** Another Mono's message, by its name; `user` holds what it wrote. */
+  peer?: string;
 };
 
 /** Whether the next turn should start a fresh provider session, and why. */
@@ -71,6 +73,16 @@ function exchanges(blocks: readonly Block[], afterId?: string): Exchange[] {
         user: "",
         reply: "",
         completion: block.monoSessionCompletion.title,
+      });
+      continue;
+    }
+    if (block.role === "user" && block.monoPeerMessage) {
+      out.push({
+        id: block.id,
+        at: block.startedAt,
+        user: block.monoPeerMessage.message,
+        reply: "",
+        peer: block.monoPeerMessage.fromName,
       });
       continue;
     }
@@ -135,6 +147,10 @@ function when(at: number | undefined): string {
 function exchangeLine(exchange: Exchange): string {
   if (exchange.completion)
     return `- ${when(exchange.at)}You, reviewing session "${exchange.completion}": ${oneLine(exchange.reply, LINE_CHARS)}`;
+  if (exchange.peer)
+    return `- ${when(exchange.at)}${exchange.peer} (a Mono): ${oneLine(exchange.user, LINE_CHARS)}${
+      exchange.reply ? ` → You: ${oneLine(exchange.reply, LINE_CHARS)}` : ""
+    }`;
   if (exchange.habit)
     return `- ${when(exchange.at)}You, from your habit "${exchange.habit}": ${oneLine(exchange.reply, LINE_CHARS)}`;
   return `- ${when(exchange.at)}User: ${oneLine(exchange.user, LINE_CHARS)}${

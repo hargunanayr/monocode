@@ -74,6 +74,7 @@ import {
 } from "../../monos/model/monoSpawnedSessions";
 import type { MonoSpawnedSession } from "../model/session";
 import { LaunchedSessionCard } from "../../monos/ui/LaunchedSessionCard";
+import { MonoPeerMessageCard } from "../../monos/ui/MonoPeerMessageCard";
 import type { MessageDelivery } from "../../monos/model/monoMessaging";
 import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
@@ -137,6 +138,7 @@ import {
   initialThinkingIndex,
   isFailedStatus,
   isIncompleteTool,
+  isMonoPeerPrompt,
   isSubagentBlock,
   isThinkingBlock,
   lastActivityIndex,
@@ -1575,6 +1577,11 @@ function AgentTranscriptComponent({
               }`}
             >
               {stampAt != null ? <DaySeparator at={stampAt} /> : null}
+              {inlineWork &&
+              turn[0].monoPeerMessage &&
+              isMonoPeerPrompt(turn[0]) ? (
+                <MonoPeerMessageCard peer={turn[0].monoPeerMessage} />
+              ) : null}
               {items
                 .flatMap((item, itemIndex) => {
                   // The header carries the process; only approvals need a row

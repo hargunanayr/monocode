@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 34] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -115,6 +115,8 @@ const APP_ACTIONS: [&str; 32] = [
     "habits.run",
     "habits.remove",
     "chat.card",
+    "monos.list",
+    "monos.send",
 ];
 const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
 
@@ -262,6 +264,17 @@ Actions:
                    "schedule":{"kind":"daily","time":"09:00"}}
                   choices accepts 1–4 options. A habit card is a suggestion;
                   the user must start it before it is scheduled.
+  monos.list     {}  Mono's own conversation only. Every Mono the user has:
+                  id, name, projects and the start of its soul; yours has
+                  "you":true.
+  monos.send     {"monoId":"<id or name>","message":"..."}
+                  Send another Mono a message. It arrives in its chat as a
+                  new turn once it is idle, and the user sees it there. Its
+                  reply, if any, arrives in your chat the same way; do not
+                  wait or poll. Sent while answering a Mono's message, it
+                  continues that thread; otherwise it starts a new one. A
+                  thread allows at most 8 messages. Reuse --request-id on
+                  retries so the message is never sent twice.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
@@ -704,6 +717,24 @@ mod tests {
         for kind in ["pr", "session", "choices", "habit"] {
             assert!(help.contains(&format!(r#""type":"{kind}""#)));
         }
+    }
+
+    #[test]
+    fn app_mode_exposes_mono_messaging() {
+        for (action, input) in [
+            ("monos.list", r#"{}"#),
+            ("monos.send", r#"{"monoId":"kiko","message":"Can you review this?"}"#),
+        ] {
+            assert!(matches!(
+                parse_args_for(&args(&[action, "--json", input]), true),
+                Ok(Parsed::Call(parsed_action, parsed_input, _))
+                    if parsed_action == action
+                        && parsed_input == serde_json::from_str::<Value>(input).unwrap()
+            ));
+            assert!(parse_args_for(&args(&[action]), false).is_err());
+            assert!(app_help().contains(action));
+        }
+        assert!(app_help().contains("at most 8 messages"));
     }
 
     #[test]

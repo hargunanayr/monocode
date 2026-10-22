@@ -10,6 +10,7 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { monoPeerLabel } from "../../monos/model/monoPeerMessages";
 import type { MessageQueueStatus, QueuedMessage } from "../model/session";
 
 export function MessageQueue({
@@ -104,7 +105,9 @@ export function MessageQueue({
               ? message.monoSessionCompletion.sessionCount
                 ? `${message.monoSessionCompletion.sessionCount} sessions finished`
                 : `Session ${message.monoSessionCompletion.status}: ${message.monoSessionCompletion.title}`
-              : message.text.trim()) ||
+              : message.monoPeerMessage
+                ? `${monoPeerLabel(message.monoPeerMessage)}: ${message.monoPeerMessage.message}`
+                : message.text.trim()) ||
             message.noteCard?.title ||
             message.handoffCard?.brief ||
             `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
@@ -170,7 +173,9 @@ export function MessageQueue({
                       </p>
                     ) : null}
                   </div>
-                  {onSteer && !message.monoSessionCompletion ? (
+                  {onSteer &&
+                  !message.monoSessionCompletion &&
+                  !message.monoPeerMessage ? (
                     <button
                       type="button"
                       disabled={sending}
@@ -185,7 +190,11 @@ export function MessageQueue({
                     type="button"
                     title="Edit queued message"
                     aria-label="Edit queued message"
-                    disabled={sending || !!message.monoSessionCompletion}
+                    disabled={
+                      sending ||
+                      !!message.monoSessionCompletion ||
+                      !!message.monoPeerMessage
+                    }
                     onClick={() => startEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md text-content/40 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
                   >
