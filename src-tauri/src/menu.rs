@@ -160,6 +160,7 @@ pub fn dispatch(app: &AppHandle, id: &str) {
         | "close_tab"
         | "toggle_sidebar"
         | "toggle_session_sidebar"
+        | "toggle_workspace_mode"
         | "zoom_in"
         | "zoom_out"
         | "zoom_reset"
@@ -403,6 +404,14 @@ fn build(
         "App: Toggle Session Sidebar",
         overrides,
     )?;
+    let toggle_workspace_mode = menu_item(
+        app,
+        "toggle_workspace_mode",
+        "Switch Chat / Explore",
+        "CmdOrCtrl+E",
+        "View: Switch Chat / Explore",
+        overrides,
+    )?;
     let open_model_picker = menu_item(
         app,
         "open_model_picker",
@@ -481,6 +490,7 @@ fn build(
     let view = SubmenuBuilder::new(app, "View")
         .item(&toggle_sidebar)
         .item(&toggle_session_sidebar)
+        .item(&toggle_workspace_mode)
         .item(&open_inbox)
         .item(&open_notes)
         .item(&toggle_terminal)

@@ -968,7 +968,7 @@ function GeneralPage({
         <Row
           id="file-tabs"
           label="File tabs"
-          description="Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes."
+          description="Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes. Applies to the inset layout; the classic layout opens files in Explore, as top-bar tabs."
         >
           <Segmented
             label="File tabs"

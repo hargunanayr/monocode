@@ -481,6 +481,17 @@ import {
   workspaceTabWorktree,
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
+import {
+  loadExploreSidebarTab,
+  nextWorkspaceView,
+  saveExploreSidebarTab,
+  workspaceViewOfSidebarTab,
+  workspaceViewOfTab,
+  workspaceViewTabs,
+  workspaceTabKind,
+  type WorkspaceView,
+} from "../features/workspace/model/workspaceView";
+import { WorkspaceViewEmpty } from "../features/workspace/ui/WorkspaceViewEmpty";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
 import {
@@ -1050,6 +1061,11 @@ function filesInWorkspaceTabs(tabs: readonly WorkspaceTab[]): FilePaneTab[] {
     ...tab.editorPanes.flatMap((pane) => pane.files),
     ...(tab.terminalPanes ?? []).flatMap((pane) => pane.files),
   ]);
+}
+
+/** Explore gives every file a top tab; the inset layout asks the setting. */
+function filesOpenAsTopTabs(inset: boolean): boolean {
+  return !inset || loadFileTabMode() === "workspace";
 }
 
 /** Stable empty tab list for the title bar while a Mono is in full view. */
@@ -2142,12 +2158,74 @@ function Workspace({
       }
       const cwd = project ?? sidebarCwdRef.current;
       saveProjectSidebarTab(cwd, tab);
+      if (tab === "files" || tab === "changes") saveExploreSidebarTab(tab);
       setSidebarTabSelection({
         project: pathKey(cwd),
         tab: tab === "inbox" ? "sessions" : tab,
       });
     },
     [showRightPanel],
+  );
+  // The classic layout shows Chat or Explore: the sidebar's tab picks the
+  // mode, and the title bar only holds that mode's tabs. The inset layout
+  // keeps files in its right panel instead.
+  const workspaceViewsOn = !insetLayout;
+  const workspaceView: WorkspaceView = workspaceViewOfSidebarTab(sidebarTab);
+  const workspaceViewRef = useRef<WorkspaceView | null>(null);
+  workspaceViewRef.current = workspaceViewsOn ? workspaceView : null;
+  /** The tab a close lands on without switching modes: the mode shows empty. */
+  const holdWorkspaceViewRef = useRef<string | null>(null);
+  /** The last session tab and the last tab of each mode, for switching back. */
+  const lastModeTabRef = useRef<{
+    session?: string;
+    chat?: string;
+    explore?: string;
+  }>({});
+  /**
+   * Chat keeps one session tab: another session of its project takes its
+   * place rather than opening a tab of its own. The one it replaces stays in
+   * the sidebar, still running if it was; a blank one is dropped.
+   */
+  const showSessionInChatTab = useCallback(
+    (session: Session) => {
+      if (!workspaceViewRef.current) return false;
+      const tab = tabsRef.current.find(
+        (entry) =>
+          entry.id === lastModeTabRef.current.session &&
+          workspaceTabKind(entry) === "session",
+      );
+      const current = tab
+        ? sessionsRef.current.find((entry) => entry.id === tab.focusedId)
+        : undefined;
+      if (
+        !tab ||
+        !current ||
+        current.id === session.id ||
+        !sameProjectPath(current.cwd, session.cwd) ||
+        !switchSessionInTab(tabsRef.current, tab.id, current.id, session.id)
+      )
+        return false;
+      if (isBlankSession(current)) {
+        lastPersisted.current.delete(current.id);
+        void forgetHarnessSession(current.harness, current.id);
+      }
+      setSessions((prev) => {
+        const next = isBlankSession(current)
+          ? prev.filter((entry) => entry.id !== current.id)
+          : prev;
+        return next.some((entry) => entry.id === session.id)
+          ? next
+          : [...next, session];
+      });
+      setTabs(
+        (prev) =>
+          switchSessionInTab(prev, tab.id, current.id, session.id) ?? prev,
+      );
+      setActiveTabId(tab.id);
+      setComposerFocused(true);
+      return true;
+    },
+    [setActiveTabId],
   );
   const sidebarCwdKey =
     sidebarCwd && sidebarCwd !== "~" ? normalizeProjectPath(sidebarCwd) : null;
@@ -2998,13 +3076,19 @@ function Workspace({
     setAutomationsViewOpen(false);
     const cwd = sidebarCwd;
     const session = newWorkspaceSession(cwd, sessionDefaults?.runtimeMode);
+    if (showSessionInChatTab(session)) return session.id;
     const tab = newTab(session.id);
     setSessions((prev) => [...prev, session]);
     appendTab(tab, cwd);
     setActiveTabId(tab.id);
     setComposerFocused(true);
     return session.id;
-  }, [appendTab, sessionDefaults?.runtimeMode, sidebarCwd]);
+  }, [
+    appendTab,
+    sessionDefaults?.runtimeMode,
+    showSessionInChatTab,
+    sidebarCwd,
+  ]);
 
   const onSelectRemoteSession = useCallback(
     (project: string, remoteSessionId: string) => {
@@ -3551,6 +3635,10 @@ function Workspace({
         );
         const close = () => {
           setTabs(next);
+          // The mode's last tab closed: stay in the mode, showing it empty.
+          if (!nextId && workspaceViewRef.current) {
+            holdWorkspaceViewRef.current = nextActiveTabId ?? null;
+          }
           // View tabs still need a valid workspace to return to underneath;
           // a Mono's opens over it, so it moves there without revealing it.
           if (nextActiveTabId) {
@@ -3654,7 +3742,10 @@ function Workspace({
   );
 
   const onCloseOtherTabs = useCallback(() => {
-    const current = tabsRef.current;
+    // Chat and Explore close only the tabs they show.
+    const current = workspaceViewRef.current
+      ? shownDeckTabsRef.current
+      : tabsRef.current;
     const activeId = activeTabIdRef.current;
     if (!current.some((tab) => tab.id === activeId)) return;
     onCloseTabs(
@@ -4311,31 +4402,52 @@ function Workspace({
     tabWorkspace,
     workspaceNavigation.revision,
   ]);
+  const activeTabKind = activeTab ? workspaceTabKind(activeTab) : undefined;
+  // Chat shows one session tab: the active one, else the last one shown.
+  const shownSessionTabId =
+    activeTabKind === "session" ? activeTabId : lastModeTabRef.current.session;
+  /** The project's tabs the title bar shows in the current mode. */
+  const shownDeckTabs = useMemo(
+    () =>
+      workspaceViewsOn
+        ? workspaceViewTabs(deckProjectTabs, workspaceView, shownSessionTabId)
+        : deckProjectTabs,
+    [deckProjectTabs, workspaceViewsOn, workspaceView, shownSessionTabId],
+  );
+  const shownDeckTabsRef = useRef(shownDeckTabs);
+  shownDeckTabsRef.current = shownDeckTabs;
+  const deckProjectTabsRef = useRef(deckProjectTabs);
+  deckProjectTabsRef.current = deckProjectTabs;
+  /** The active tab belongs to the other mode, so the main area shows empty. */
+  const workspaceViewEmpty =
+    workspaceViewsOn &&
+    !!activeTab &&
+    workspaceViewOfTab(activeTab) !== workspaceView;
 
   const onNext = useCallback(() => {
     if (monoViewIdRef.current) {
       activateTab(activeTabId);
       return;
     }
-    const index = deckProjectTabs.findIndex((t) => t.id === activeTabId);
+    const index = shownDeckTabs.findIndex((t) => t.id === activeTabId);
     if (index >= 0)
-      activateTab(deckProjectTabs[(index + 1) % deckProjectTabs.length].id);
-  }, [activateTab, activeTabId, deckProjectTabs]);
+      activateTab(shownDeckTabs[(index + 1) % shownDeckTabs.length].id);
+  }, [activateTab, activeTabId, shownDeckTabs]);
 
   const onPrev = useCallback(() => {
     if (monoViewIdRef.current) {
       activateTab(activeTabId);
       return;
     }
-    const index = deckProjectTabs.findIndex((t) => t.id === activeTabId);
+    const index = shownDeckTabs.findIndex((t) => t.id === activeTabId);
     if (index >= 0) {
       activateTab(
-        deckProjectTabs[
-          (index - 1 + deckProjectTabs.length) % deckProjectTabs.length
+        shownDeckTabs[
+          (index - 1 + shownDeckTabs.length) % shownDeckTabs.length
         ].id,
       );
     }
-  }, [activateTab, activeTabId, deckProjectTabs]);
+  }, [activateTab, activeTabId, shownDeckTabs]);
 
   const onVisitBack = useCallback(() => {
     if (monoViewIdRef.current) {
@@ -4377,11 +4489,93 @@ function Workspace({
     (slot: number) => {
       const tab =
         slot < 0
-          ? deckProjectTabs[deckProjectTabs.length - 1]
-          : deckProjectTabs[slot];
+          ? shownDeckTabs[shownDeckTabs.length - 1]
+          : shownDeckTabs[slot];
       if (tab) activateTab(tab.id);
     },
-    [activateTab, deckProjectTabs],
+    [activateTab, shownDeckTabs],
+  );
+
+  // Whatever activates a tab of the other mode (a file opened from a chat, a
+  // session picked in Explore) switches to it, except a close that leaves the
+  // mode with nothing to show.
+  useEffect(() => {
+    const tab = tabsRef.current.find((entry) => entry.id === activeTabId);
+    if (!tab || !activeTabKind) return;
+    const mode = workspaceViewOfTab(tab);
+    if (activeTabKind === "session") lastModeTabRef.current.session = tab.id;
+    lastModeTabRef.current[mode] = tab.id;
+    if (holdWorkspaceViewRef.current === tab.id) {
+      holdWorkspaceViewRef.current = null;
+      return;
+    }
+    holdWorkspaceViewRef.current = null;
+    const current = workspaceViewRef.current;
+    if (current && current !== mode) {
+      setSidebarTab(mode === "chat" ? "sessions" : loadExploreSidebarTab());
+    }
+  }, [activeTabId, activeTabKind, setSidebarTab]);
+
+  /** Switch the workspace to Chat or Explore, toggling without a mode. */
+  const onSwitchWorkspaceView = useCallback(
+    (mode?: WorkspaceView) => {
+      const current = workspaceViewRef.current;
+      if (!current) return;
+      const next = mode ?? nextWorkspaceView(current);
+      setSearchViewOpen(false);
+      setSettingsOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      if (next !== current) {
+        setSidebarTab(next === "chat" ? "sessions" : loadExploreSidebarTab());
+      }
+      const deck = deckProjectTabsRef.current;
+      const active = deck.find((tab) => tab.id === activeTabIdRef.current);
+      if (active && workspaceViewOfTab(active) === next) {
+        if (monoViewIdRef.current) activateTab(active.id);
+        return;
+      }
+      const last = lastModeTabRef.current;
+      const target =
+        next === "chat"
+          ? (deck.find(
+              (tab) =>
+                tab.id === last.chat && workspaceViewOfTab(tab) === "chat",
+            ) ??
+            deck.find((tab) => workspaceTabKind(tab) === "session") ??
+            deck.find((tab) => workspaceTabKind(tab) === "terminal"))
+          : (deck.find(
+              (tab) =>
+                tab.id === last.explore &&
+                workspaceViewOfTab(tab) === "explore",
+            ) ?? deck.find((tab) => workspaceViewOfTab(tab) === "explore"));
+      if (target) {
+        // Picked here on purpose, so the mode follows it.
+        holdWorkspaceViewRef.current = null;
+        activateTab(target.id);
+        setComposerFocused(next === "chat");
+        return;
+      }
+      // Chat always has a conversation to show; Explore waits for a file.
+      if (next === "chat") onNew();
+      else {
+        closeMonoView();
+        setComposerFocused(false);
+      }
+    },
+    [activateTab, closeMonoView, onNew, setSidebarTab],
+  );
+
+  /** A sidebar tab of the other mode switches modes, like the switch does. */
+  const onPickSidebarTab = useCallback(
+    (tab: SidebarTabId) => {
+      const current = workspaceViewRef.current;
+      const mode = workspaceViewOfSidebarTab(tab);
+      setSidebarTab(tab);
+      if (current && current !== mode) onSwitchWorkspaceView(mode);
+    },
+    [onSwitchWorkspaceView, setSidebarTab],
   );
 
   const onFocusPane = useCallback(
@@ -4498,7 +4692,7 @@ function Workspace({
             : ((await resolveOpenablePath(diffCwd, path)) ?? path)
           : undefined;
         if (resolved) rememberOpenedFile(diffCwd, resolved);
-        if (!session && loadFileTabMode() === "workspace") {
+        if (!session && filesOpenAsTopTabs(insetLayoutRef.current)) {
           closeMonoView();
           if (loadDiffViewer() === "unified") {
             openInWorkspaceTab((prev) =>
@@ -4597,7 +4791,7 @@ function Workspace({
   /** Stack one section's working-tree changes in one review, whatever the diff-view setting. */
   const onOpenAllChanges = useCallback(
     (kind: GitFileDiffKind) => {
-      if (loadFileTabMode() === "workspace") {
+      if (filesOpenAsTopTabs(insetLayoutRef.current)) {
         const projectCwd = sidebarCwdRef.current;
         closeMonoView();
         openInWorkspaceTab((prev) =>
@@ -4632,7 +4826,7 @@ function Workspace({
 
   const onOpenCommit = useCallback(
     (commit: GitHistoryCommit, pin?: boolean) => {
-      if (loadFileTabMode() === "workspace") {
+      if (filesOpenAsTopTabs(insetLayoutRef.current)) {
         const projectCwd = sidebarCwdRef.current;
         closeMonoView();
         openWorkspaceReviewFile(
@@ -5341,7 +5535,10 @@ function Workspace({
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
-      if (replaceBlankPaneWithSession(session)) {
+      if (
+        replaceBlankPaneWithSession(session) ||
+        showSessionInChatTab(session)
+      ) {
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
@@ -5358,6 +5555,7 @@ function Workspace({
       focusOpenSession,
       replaceBlankPaneWithSession,
       revealLinkedSessionUpdate,
+      showSessionInChatTab,
     ],
   );
 
@@ -6956,7 +7154,7 @@ function Workspace({
           fileProjectCwd,
         );
         const pin = !!options?.pin;
-        if (loadFileTabMode() === "workspace") {
+        if (filesOpenAsTopTabs(insetLayoutRef.current)) {
           // Built once: the updater may run twice in StrictMode.
           const created = newEditorWorkspaceTab(
             pin ? file : { ...file, preview: true },
@@ -11984,7 +12182,7 @@ function Workspace({
 
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
-      ...deckProjectTabs.map((tab) =>
+      ...shownDeckTabs.map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
       ...(insetLayout
@@ -12726,7 +12924,8 @@ function Workspace({
   );
 
   displayedTabNavigation.current = {
-    tabs: insetLayout ? titleTabs : [],
+    // Chat and Explore step to a neighbour of the same mode on close.
+    tabs: insetLayout || workspaceViewsOn ? titleTabs : [],
     activeId: settingsOpen
       ? ""
       : monoCovers
@@ -12922,6 +13121,26 @@ function Workspace({
     );
   }, [insetLayout, onCloseOtherTabs, onCloseDisplayedTabs]);
   const onCloseAllVisibleTabs = useCallback(() => {
+    const mode = workspaceViewRef.current;
+    if (mode) {
+      const shown = shownDeckTabsRef.current.map((tab) => tab.id);
+      if (shown.length === 0) return;
+      if (mode === "chat") {
+        onCloseEveryTab(shown);
+        return;
+      }
+      // Explore closes its files and shows empty over a chat tab left open.
+      const deck = deckProjectTabsRef.current.filter(
+        (tab) => !shown.includes(tab.id),
+      );
+      const fallback =
+        deck.find((tab) => tab.id === lastModeTabRef.current.chat) ?? deck[0];
+      if (fallback) {
+        holdWorkspaceViewRef.current = fallback.id;
+        onCloseTabs(shown, fallback.id);
+        return;
+      }
+    }
     if (!insetLayout) {
       onCloseAllTabs();
       return;
@@ -12929,22 +13148,30 @@ function Workspace({
     onCloseAllDisplayedTabs(
       displayedTabNavigation.current.tabs.map((tab) => tab.id),
     );
-  }, [insetLayout, onCloseAllTabs, onCloseAllDisplayedTabs]);
+  }, [
+    insetLayout,
+    onCloseAllTabs,
+    onCloseAllDisplayedTabs,
+    onCloseEveryTab,
+    onCloseTabs,
+  ]);
 
   const actions = useRef({
     onNewFocused,
     onArchiveFocusedSession,
     onCloseOtherTabs: onCloseOtherVisibleTabs,
     onCloseAllTabs: onCloseAllVisibleTabs,
-    onCloseFocused: onCloseVisibleTab,
+    // Nothing of this mode is shown, so there is no pane to close or split.
+    onCloseFocused: workspaceViewEmpty ? () => {} : onCloseVisibleTab,
     onNext: () => onCycleVisibleTab(1),
     onPrev: () => onCycleVisibleTab(-1),
     onVisitBack,
     onVisitForward,
     onActivate: onActivateVisibleTab,
-    onSplit,
+    onSplit: workspaceViewEmpty ? () => {} : onSplit,
     onFocusDir,
     onToggleSidebar,
+    onSwitchWorkspaceView: () => onSwitchWorkspaceView(),
     onToggleSessionSidebar: onToggleSessionSidebarShortcut,
     onToggleMono,
     onGoToFile,
@@ -12968,15 +13195,17 @@ function Workspace({
     onArchiveFocusedSession,
     onCloseOtherTabs: onCloseOtherVisibleTabs,
     onCloseAllTabs: onCloseAllVisibleTabs,
-    onCloseFocused: onCloseVisibleTab,
+    // Nothing of this mode is shown, so there is no pane to close or split.
+    onCloseFocused: workspaceViewEmpty ? () => {} : onCloseVisibleTab,
     onNext: () => onCycleVisibleTab(1),
     onPrev: () => onCycleVisibleTab(-1),
     onVisitBack,
     onVisitForward,
     onActivate: onActivateVisibleTab,
-    onSplit,
+    onSplit: workspaceViewEmpty ? () => {} : onSplit,
     onFocusDir,
     onToggleSidebar,
+    onSwitchWorkspaceView: () => onSwitchWorkspaceView(),
     onToggleSessionSidebar: onToggleSessionSidebarShortcut,
     onToggleMono,
     onGoToFile,
@@ -13205,6 +13434,8 @@ function Workspace({
           run("toggle_sidebar", a.onToggleSidebar);
         else if (shortcut === "App: Toggle Session Sidebar")
           run("toggle_session_sidebar", a.onToggleSessionSidebar);
+        else if (shortcut === "View: Switch Chat / Explore")
+          run("toggle_workspace_mode", a.onSwitchWorkspaceView);
         else if (shortcut === "App: Toggle Mono")
           run("toggle_mono", a.onToggleMono);
         else if (shortcut === "App: Go to File")
@@ -13278,6 +13509,9 @@ function Workspace({
       ),
       listen("toggle_session_sidebar", () =>
         run("toggle_session_sidebar", actions.current.onToggleSessionSidebar),
+      ),
+      listen("toggle_workspace_mode", () =>
+        run("toggle_workspace_mode", actions.current.onSwitchWorkspaceView),
       ),
       listen("open_project", () => {
         void actions.current.pickProject();
@@ -14087,7 +14321,9 @@ function Workspace({
       explorerRootLabel={explorerRootLabel}
       open={sessionSidebarOpen}
       tab={insetLayout ? "sessions" : sidebarTab}
-      onTabChange={setSidebarTab}
+      onTabChange={workspaceViewsOn ? onPickSidebarTab : setSidebarTab}
+      workspaceView={workspaceViewsOn ? workspaceView : undefined}
+      onSwitchWorkspaceView={onSwitchWorkspaceView}
       rightPanel={
         insetLayout && !settingsOpen && !monoCovers
           ? {
@@ -14405,10 +14641,14 @@ function Workspace({
                                     key={tab.id}
                                     data-workspace-tab={tab.id}
                                     aria-hidden={
-                                      tab.id !== activeTabId || monoCovers
+                                      tab.id !== activeTabId ||
+                                      monoCovers ||
+                                      workspaceViewEmpty
                                     }
                                     className={
-                                      tab.id === activeTabId && !monoCovers
+                                      tab.id === activeTabId &&
+                                      !monoCovers &&
+                                      !workspaceViewEmpty
                                         ? "absolute inset-0 flex h-full min-h-0 flex-col"
                                         : "hidden"
                                     }
@@ -14419,7 +14659,8 @@ function Workspace({
                                         visible={
                                           tab.id === activeTabId &&
                                           !inboxViewOpen &&
-                                          !monoCovers
+                                          !monoCovers &&
+                                          !workspaceViewEmpty
                                         }
                                         layout={tab.layout}
                                         sessions={sessions}
@@ -14433,6 +14674,7 @@ function Workspace({
                                           tab.id === activeTabId &&
                                           !monoViewId &&
                                           !inboxViewOpen &&
+                                          !workspaceViewEmpty &&
                                           !tab.diffFocused &&
                                           !projectTerminalFocused
                                             ? tab.focusedId
@@ -14473,6 +14715,13 @@ function Workspace({
                                     </div>
                                   </div>
                                 ))}
+                                {workspaceViewEmpty && !monoCovers ? (
+                                  <WorkspaceViewEmpty
+                                    mode={workspaceView}
+                                    onNewSession={onNew}
+                                    onGoToFile={onGoToFile}
+                                  />
+                                ) : null}
                                 {sessions
                                   .filter((session) =>
                                     isMonoSession(session.id),
