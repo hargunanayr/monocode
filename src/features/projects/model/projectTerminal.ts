@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import {
   newEditorPane,
+  newTerminalWorkspaceTab,
   nextTerminalTitleFromFiles,
   type EditorPane,
   type FilePaneTab,
@@ -89,6 +90,26 @@ export function createProjectTerminal(
     size: defaultDockSize(side),
     open: true,
   };
+}
+
+/**
+ * Terminals saved in a project dock by an older build, reopened as top-level
+ * terminal tabs beside the sessions, one tab per terminal.
+ */
+export function dockTerminalTabs(
+  docks: readonly ProjectTerminalDock[],
+): WorkspaceTab[] {
+  return docks.flatMap((dock) =>
+    dock.pane.files
+      .filter((file) => file.terminal)
+      .map((file) =>
+        newTerminalWorkspaceTab(
+          file.projectCwd || sameProjectPath(file.cwd, dock.projectPath)
+            ? file
+            : { ...file, projectCwd: dock.projectPath },
+        ),
+      ),
+  );
 }
 
 export function addTerminalToDock(

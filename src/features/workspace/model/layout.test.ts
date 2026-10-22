@@ -10,6 +10,7 @@ import {
   isReviewTab,
   isSessionChangesTab,
   isTerminalTab,
+  isTerminalWorkspaceTab,
   layoutLeaves,
   layoutSashes,
   leaf,
@@ -611,6 +612,31 @@ describe("newTerminalWorkspaceTab", () => {
     expect(tab.focusedId).toBe(tab.terminalPanes[0]?.id);
     expect(tab.editorPanes).toEqual([]);
     expect(tab.terminalPanes[0]?.files).toEqual([file]);
+  });
+});
+
+describe("isTerminalWorkspaceTab", () => {
+  it("is a tab of terminals alone", () => {
+    expect(
+      isTerminalWorkspaceTab(newTerminalWorkspaceTab(newTerminalFile("/repo"))),
+    ).toBe(true);
+  });
+
+  it("is not a session tab, with or without a terminal split beside it", () => {
+    const tab = newTab("session-a");
+    expect(isTerminalWorkspaceTab(tab)).toBe(false);
+    expect(
+      isTerminalWorkspaceTab(openTerminalTab(tab, newTerminalFile("/repo"))),
+    ).toBe(false);
+  });
+
+  it("is a session tab whose blank conversation gave its pane to a terminal", () => {
+    const tab = openTerminalTab(
+      newTab("session-a"),
+      newTerminalFile("/repo"),
+      "session-a",
+    );
+    expect(isTerminalWorkspaceTab(tab)).toBe(true);
   });
 });
 

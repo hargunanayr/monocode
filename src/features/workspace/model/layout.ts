@@ -333,6 +333,15 @@ export function newTerminalWorkspaceTab(file: FilePaneTab): WorkspaceTab {
   };
 }
 
+/** A top-level tab that holds only terminals: no conversation or file pane. */
+export function isTerminalWorkspaceTab(tab: WorkspaceTab): boolean {
+  const terminalIds = new Set((tab.terminalPanes ?? []).map((pane) => pane.id));
+  return (
+    terminalIds.size > 0 &&
+    leafIds(tab.layout).every((id) => terminalIds.has(id))
+  );
+}
+
 export function nextTerminalTitleFromFiles(
   files: Iterable<FilePaneTab>,
   cwd: string,
