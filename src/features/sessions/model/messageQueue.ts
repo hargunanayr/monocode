@@ -48,13 +48,22 @@ export function canDispatchQueuedHead(session: Session): boolean {
   return true;
 }
 
-/** Monos deliver one waiting follow-up at a time after the provider is ready. */
-export function canSteerQueuedHead(session: Session): boolean {
-  const head = queuedHead(session);
-  return (
-    !!head &&
-    !head.monoSessionCompletion &&
-    !head.monoPeerMessage &&
+/** App notifications and Mono messages open a turn of their own once idle. */
+function waitsForIdle(message: QueuedMessage): boolean {
+  return !!(message.monoSessionCompletion || message.monoPeerMessage);
+}
+
+/**
+ * The follow-up a busy Mono takes next, once the provider is ready: the first
+ * one the user wrote. Messages waiting for idle never hold it back, since the
+ * turn they wait out may not end until the user says something.
+ */
+export function queuedSteerTarget(session: Session): QueuedMessage | undefined {
+  const target = session.queuedMessages?.find(
+    (message) => !waitsForIdle(message),
+  );
+  const steerable =
+    !!target &&
     !!session.busy &&
     !!session.turnReady &&
     !session.worktreePreparing &&
@@ -66,11 +75,11 @@ export function canSteerQueuedHead(session: Session): boolean {
     ) &&
     session.queueStatus !== "paused" &&
     session.queueStatus !== "resuming" &&
-    !isEditingQueuedHead(session) &&
+    session.editingQueuedMessageId !== target.id &&
     !isPreparingHandoff(session) &&
-    head.intent !== "plan" &&
-    head.intent !== "orchestrate"
-  );
+    target.intent !== "plan" &&
+    target.intent !== "orchestrate";
+  return steerable ? target : undefined;
 }
 
 /** Resolve a queued row for auto-dispatch (head, idle) or an explicit Steer. */
@@ -83,10 +92,7 @@ export function queuedMessageForSubmit(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
-  if (mode === "steer")
-    return message.monoSessionCompletion || message.monoPeerMessage
-      ? undefined
-      : message;
+  if (mode === "steer") return waitsForIdle(message) ? undefined : message;
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;

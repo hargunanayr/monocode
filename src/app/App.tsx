@@ -543,9 +543,10 @@ import {
 
 import {
   canDispatchQueuedHead,
-  canSteerQueuedHead,
   dequeueQueuedMessage,
+  queuedHead,
   queuedMessageForSubmit,
+  queuedSteerTarget,
 } from "../features/sessions/model/messageQueue";
 import { deliverQueuedFollowUp } from "../features/sessions/model/queuedFollowUp";
 import {
@@ -7715,7 +7716,7 @@ function Workspace({
         );
         if (
           !message ||
-          !canSteerQueuedHead(current) ||
+          queuedSteerTarget(current) !== message ||
           !canSteerHarness(current.harness) ||
           operatorCommand.matched
         )
@@ -9617,6 +9618,16 @@ function Workspace({
   useEffect(() => {
     const timers: number[] = [];
     const scheduled = new Set<string>();
+    // An idle session sends its head; a busy Mono takes the user's next follow-up.
+    const nextQueuedDelivery = (session: Session) => {
+      if (canDispatchQueuedHead(session)) return queuedHead(session);
+      if (!monoForSession(session.id) || !canSteerHarness(session.harness))
+        return undefined;
+      const target = queuedSteerTarget(session);
+      return target && !consumeOperatorCommand(target.text).matched
+        ? target
+        : undefined;
+    };
     for (const session of sessions) {
       const queued = session.queuedMessages ?? [];
       if (queued.length === 0) continue;
@@ -9631,20 +9642,8 @@ function Workspace({
         );
         continue;
       }
-      if (
-        !(
-          canDispatchQueuedHead(session) ||
-          (monoForSession(session.id) &&
-            canSteerQueuedHead(session) &&
-            canSteerHarness(session.harness) &&
-            !consumeOperatorCommand(queued[0].text).matched)
-        ) ||
-        queueDispatchingRef.current.has(session.id)
-      ) {
-        continue;
-      }
-
-      const next = queued[0];
+      if (queueDispatchingRef.current.has(session.id)) continue;
+      const next = nextQueuedDelivery(session);
       if (!next) continue;
       queueDispatchingRef.current.add(session.id);
       scheduled.add(session.id);
@@ -9654,19 +9653,8 @@ function Workspace({
           const latest = sessionsRef.current.find(
             (entry) => entry.id === session.id,
           );
-          const head = latest?.queuedMessages?.[0];
-          if (
-            !latest ||
-            !head ||
-            head.id !== next.id ||
-            !(
-              canDispatchQueuedHead(latest) ||
-              (monoForSession(latest.id) &&
-                canSteerQueuedHead(latest) &&
-                canSteerHarness(latest.harness) &&
-                !consumeOperatorCommand(head.text).matched)
-            )
-          ) {
+          const head = latest && nextQueuedDelivery(latest);
+          if (!latest || !head || head.id !== next.id) {
             queueDispatchingRef.current.delete(session.id);
             return;
           }
@@ -9712,9 +9700,9 @@ function Workspace({
               if (
                 current &&
                 (steering
-                  ? canSteerQueuedHead(current)
-                  : canDispatchQueuedHead(current)) &&
-                current.queuedMessages?.[0] === head
+                  ? queuedSteerTarget(current) === head
+                  : canDispatchQueuedHead(current) &&
+                    current.queuedMessages?.[0] === head)
               ) {
                 setSessions((prev) =>
                   prev.map((entry) =>

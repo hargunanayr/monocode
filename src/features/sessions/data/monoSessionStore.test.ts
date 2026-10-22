@@ -12,7 +12,7 @@ import {
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
 } from "../../monos/model/monoSessionCompletion";
-import { canSteerQueuedHead } from "../model/messageQueue";
+import { queuedSteerTarget } from "../model/messageQueue";
 import { recordArtifactCard } from "../../artifacts/artifacts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -152,13 +152,13 @@ describe("Mono database pagination and writes", () => {
     const restored = (await getSession(session.id))!;
     expect(restored.queuedMessages?.[0]).toEqual(notification);
     expect(
-      canSteerQueuedHead({
+      queuedSteerTarget({
         ...restored,
         busy: true,
         turnReady: true,
         queueStatus: "active",
       }),
-    ).toBe(false);
+    ).toBeUndefined();
     restored.blocks = [
       ...restored.blocks,
       {
