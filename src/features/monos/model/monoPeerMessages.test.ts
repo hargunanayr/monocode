@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import {
-  canSteerQueuedHead,
+  queuedSteerTarget,
   queuedMessageForSubmit,
 } from "../../sessions/model/messageQueue";
 import { groupMonoTurns } from "../../sessions/model/transcriptActivity";
@@ -65,7 +65,7 @@ it("waits for an idle Mono instead of steering its turn", () => {
     turnReady: true,
     queuedMessages: [monoPeerQueuedMessage("m", peer(1))],
   };
-  expect(canSteerQueuedHead(session)).toBe(false);
+  expect(queuedSteerTarget(session)).toBeUndefined();
   expect(queuedMessageForSubmit(session, "m", "steer")).toBeUndefined();
   expect(
     queuedMessageForSubmit({ ...session, busy: false }, "m", "dispatch"),
