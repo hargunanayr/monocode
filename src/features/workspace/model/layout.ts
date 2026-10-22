@@ -298,6 +298,38 @@ export function openWorkspaceFile(
   };
 }
 
+/**
+ * Workspace file-tab mode for a working copy's Changes tab: retarget the tab
+ * already holding it, else insert a new top-level tab. Pure like
+ * `openWorkspaceFile`.
+ */
+export function openWorkspaceChanges(
+  tabs: WorkspaceTab[],
+  cwd: string,
+  insert: (tabs: WorkspaceTab[], tab: WorkspaceTab) => WorkspaceTab[],
+  focusPath?: string,
+  focusKind?: GitFileDiffKind,
+  projectCwd?: string,
+): { tabs: WorkspaceTab[]; tabId: string; paneId?: string } {
+  const next = newChangesTab(cwd, focusPath, focusKind, projectCwd);
+  const key = editorTabKey(next);
+  const hit = tabs.find((tab) =>
+    tab.editorPanes.some((pane) =>
+      pane.files.some((file) => editorTabKey(file) === key),
+    ),
+  );
+  if (!hit) {
+    const created = newEditorWorkspaceTab(next);
+    return { tabs: insert(tabs, created), tabId: created.id };
+  }
+  const opened = openChangesTab(hit, cwd, focusPath, focusKind, projectCwd);
+  return {
+    tabs: tabs.map((tab) => (tab === hit ? opened : tab)),
+    tabId: hit.id,
+    paneId: opened.focusedId,
+  };
+}
+
 /** `path` carries the label: an agent tab has no file behind it. */
 export function newAgentTab(
   title: string,
