@@ -27,6 +27,17 @@ export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 export const listWorktrees = (cwd: string) =>
   invokeWorkspace<Worktrees>("git_worktrees", { cwd });
 
+/** The folder new worktrees of local projects go under, one folder per
+ * project. `custom` is false while it is the standard `~/.monocode/worktrees`. */
+export type WorktreeLocation = { root: string; standard: string; custom: boolean };
+
+export const worktreeLocation = () =>
+  invoke<WorktreeLocation>("worktree_location");
+
+/** `null` goes back to the standard folder. Existing worktrees stay put. */
+export const setWorktreeLocation = (root: string | null) =>
+  invoke<WorktreeLocation>("worktree_location_set", { root });
+
 export async function createWorktree(
   cwd: string,
   branch: string,

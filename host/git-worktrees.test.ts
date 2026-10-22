@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -11,6 +11,11 @@ import {
   renameHostWorktreeBranch,
   resolveHostWorktree,
 } from "./git-worktrees";
+
+// Keep test worktrees out of the real ~/.monocode/worktrees.
+process.env.MONOCODE_WORKTREES_DIR = mkdtempSync(
+  join(tmpdir(), "monocode-host-worktrees-"),
+);
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -157,6 +162,11 @@ it("creates registered host worktrees and binds new sessions to the selected che
   });
 
   const tree = await createHostWorktree(cwd, "feature/task", "HEAD", false);
+  expect(
+    tree.path.startsWith(
+      realpathSync.native(process.env.MONOCODE_WORKTREES_DIR!),
+    ),
+  ).toBe(true);
   expect(tree).toMatchObject({
     branch: "feature/task",
     isMain: false,

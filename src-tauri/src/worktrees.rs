@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Manager, State};
 
 use crate::fs::{expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path};
 use crate::session_store::SessionStore;
@@ -122,16 +123,129 @@ fn session_ids(conn: &rusqlite::Connection, path: &Path) -> Result<Vec<String>, 
     Ok(ids)
 }
 
-fn default_root(main: &Path) -> PathBuf {
+#[derive(Default, Serialize, Deserialize)]
+struct LocationSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
+}
+
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("worktree-location.json"))
+}
+
+fn read_settings(app: &AppHandle) -> LocationSettings {
+    settings_path(app)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Where new worktrees go when the user has not picked a folder. Kept out of
+/// the project and its parent so neither fills up with checkouts.
+fn standard_home() -> PathBuf {
+    crate::dirs_home()
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".monocode")
+        .join("worktrees")
+}
+
+fn worktrees_home(app: &AppHandle) -> PathBuf {
+    read_settings(app)
+        .root
+        .map(|root| expand_home(&root))
+        .unwrap_or_else(standard_home)
+}
+
+/// One folder per repository under `home`. The hash keeps two projects with
+/// the same folder name apart.
+fn default_root(home: &Path, main: &Path) -> PathBuf {
     let name = main.file_name().unwrap_or_default().to_string_lossy();
-    main.with_file_name(format!("{name}-worktrees"))
+    let digest = Sha256::digest(path_to_js(main).as_bytes());
+    let hash: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    home.join(format!("{name}-{hash}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeLocation {
+    root: String,
+    standard: String,
+    custom: bool,
+}
+
+fn location(app: &AppHandle) -> WorktreeLocation {
+    let custom = read_settings(app).root;
+    WorktreeLocation {
+        root: path_to_js(
+            &custom
+                .as_deref()
+                .map(expand_home)
+                .unwrap_or_else(standard_home),
+        ),
+        standard: path_to_js(&standard_home()),
+        custom: custom.is_some(),
+    }
+}
+
+fn validate_home(root: &str) -> Result<PathBuf, String> {
+    let path = expand_home(root.trim());
+    if root.trim().is_empty() || !path.is_absolute() {
+        return Err("Choose a full folder path".into());
+    }
+    if path.exists() && !path.is_dir() {
+        return Err(format!("{} is not a folder", path.display()));
+    }
+    std::fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // A checkout nested in another one shows up in its status, search and
+    // file watchers.
+    if git(&path, &["rev-parse", "--show-toplevel"]).is_ok() {
+        return Err("Choose a folder outside any Git repository".into());
+    }
+    Ok(path)
 }
 
 #[tauri::command(async)]
-pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Worktrees, String> {
+pub fn worktree_location(app: AppHandle) -> WorktreeLocation {
+    location(&app)
+}
+
+/// `None` goes back to the standard folder. Existing worktrees stay where
+/// they are; Git keeps track of them.
+#[tauri::command(async)]
+pub fn worktree_location_set(
+    app: AppHandle,
+    root: Option<String>,
+) -> Result<WorktreeLocation, String> {
+    let settings = match root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(root) => LocationSettings {
+            root: Some(path_to_js(&validate_home(root)?)),
+        },
+        None => LocationSettings::default(),
+    };
+    let path = settings_path(&app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let raw = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| e.to_string())?;
+    Ok(location(&app))
+}
+
+#[tauri::command(async)]
+pub fn git_worktrees(
+    app: AppHandle,
+    cwd: String,
+    store: State<'_, SessionStore>,
+) -> Result<Worktrees, String> {
     let mut worktrees = list(&expand_home(&cwd))?;
     let main = worktrees.first().ok_or("No working copies found")?;
-    let default_root = path_to_js(&default_root(Path::new(&main.path)));
+    let default_root = path_to_js(&default_root(&worktrees_home(&app), Path::new(&main.path)));
     {
         let conn = store.lock_conn()?;
         for tree in &mut worktrees {
@@ -156,7 +270,13 @@ pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Work
     })
 }
 
-fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Worktree, String> {
+fn create(
+    home: &Path,
+    root: &Path,
+    branch: &str,
+    base: &str,
+    existing: bool,
+) -> Result<Worktree, String> {
     let branch = branch.trim();
     if branch.starts_with('-') || branch.starts_with('@') || branch.is_empty() {
         return Err("Enter a valid branch name".into());
@@ -170,7 +290,7 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
         return Err("This branch already has a working copy. Select it from the picker.".into());
     }
     let main = trees.first().ok_or("No working copies found")?;
-    let parent = default_root(Path::new(&main.path));
+    let parent = default_root(home, Path::new(&main.path));
     let slug: String = branch
         .chars()
         .map(|c| {
@@ -233,13 +353,20 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
 
 #[tauri::command(async)]
 pub async fn git_worktree_create(
+    app: AppHandle,
     cwd: String,
     branch: String,
     base: String,
     existing: bool,
 ) -> Result<Worktree, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        create(&expand_home(&cwd), &branch, &base, existing)
+        create(
+            &worktrees_home(&app),
+            &expand_home(&cwd),
+            &branch,
+            &base,
+            existing,
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -352,7 +479,7 @@ fn checkout_state_matches(source: &Path, target: &Path) -> bool {
     })
 }
 
-fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
+fn create_seeded(home: &Path, root: &Path, branch: &str) -> Result<Worktree, String> {
     if let Some(tree) = list(root)?
         .into_iter()
         .find(|tree| tree.branch.as_deref() == Some(branch))
@@ -376,7 +503,7 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
             ));
         }
     }
-    let tree = create(root, branch, "HEAD", branch_exists)?;
+    let tree = create(home, root, branch, "HEAD", branch_exists)?;
     if let Err(error) = copy_checkout_state(root, Path::new(&tree.path)) {
         let _ = remove(root, Path::new(&tree.path), true);
         if !branch_exists {
@@ -392,12 +519,15 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
 /// between Git creation and run-state persistence recoverable.
 #[tauri::command(async)]
 pub async fn git_orchestration_worktree_create(
+    app: AppHandle,
     cwd: String,
     branch: String,
 ) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        create_seeded(&worktrees_home(&app), &expand_home(&cwd), branch.trim())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, String> {
@@ -809,6 +939,27 @@ mod tests {
     }
 
     #[test]
+    fn keeps_worktrees_out_of_the_project_and_its_parent() {
+        let home = Path::new("/home/me/.monocode/worktrees");
+        let a = default_root(home, Path::new("/work/a/api"));
+        let b = default_root(home, Path::new("/work/b/api"));
+        assert_eq!(a.parent(), Some(home));
+        assert!(a.file_name().unwrap().to_string_lossy().starts_with("api-"));
+        assert_ne!(a, b);
+        assert_eq!(a, default_root(home, Path::new("/work/a/api")));
+    }
+
+    #[test]
+    fn rejects_a_worktree_folder_inside_a_repository() {
+        let repo = repo();
+        let inside = repo.0.join("repo").join("worktrees");
+        assert!(validate_home(inside.to_str().unwrap()).is_err());
+        assert!(validate_home("relative/path").is_err());
+        let outside = repo.0.join("worktrees");
+        assert_eq!(validate_home(outside.to_str().unwrap()).unwrap(), outside);
+    }
+
+    #[test]
     fn parses_literal_paths_and_worktree_flags() {
         let trees = parse_worktrees("worktree /repo\0HEAD abc\0branch refs/heads/main\0\0worktree /a\nquoted\"path\0HEAD def\0detached\0locked reason\0prunable missing\0\0");
         assert!(trees[0].is_main);
@@ -823,7 +974,14 @@ mod tests {
         let root = repo.0.join("repo");
         std::fs::write(root.join("main-only"), "main change").unwrap();
         git_checked(&root, &["add", "main-only"]).unwrap();
-        let tree = create(&root, "feature/test", "main", false).unwrap();
+        let tree = create(
+            &repo.0.join("worktrees"),
+            &root,
+            "feature/test",
+            "main",
+            false,
+        )
+        .unwrap();
         let path = Path::new(&tree.path);
         assert!(!path.join("main-only").exists());
         assert!(git(path, &["diff", "--cached", "--name-only"])
@@ -889,7 +1047,7 @@ mod tests {
         std::fs::write(root.join("untracked.txt"), "lead new\n").unwrap();
         std::fs::remove_file(root.join("deleted.txt")).unwrap();
 
-        let tree = create_seeded(&root, "mc/orch-testworker").unwrap();
+        let tree = create_seeded(&repo.0.join("worktrees"), &root, "mc/orch-testworker").unwrap();
         let worker = Path::new(&tree.path);
         assert_eq!(
             std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
@@ -901,12 +1059,14 @@ mod tests {
         );
         assert!(!worker.join("deleted.txt").exists());
         assert_eq!(
-            create_seeded(&root, "mc/orch-testworker").unwrap().path,
+            create_seeded(&repo.0.join("worktrees"), &root, "mc/orch-testworker")
+                .unwrap()
+                .path,
             tree.path
         );
 
         std::fs::write(root.join("tracked.txt"), "later lead edit\n").unwrap();
-        assert!(create_seeded(&root, "mc/orch-testworker").is_err());
+        assert!(create_seeded(&repo.0.join("worktrees"), &root, "mc/orch-testworker").is_err());
         assert_eq!(
             std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
             "lead dirty\n"
@@ -919,11 +1079,11 @@ mod tests {
         let repo = repo();
         let root = repo.0.join("repo");
         git_checked(&root, &["branch", "existing"]).unwrap();
-        let tree = create(&root, "existing", "HEAD", true).unwrap();
-        assert!(create(&root, "existing", "HEAD", true).is_err());
-        assert!(create(&root, "main", "HEAD", true).is_err());
-        assert!(create(&root, "bad name", "HEAD", false).is_err());
-        assert!(create(&root, "valid", "--help", false).is_err());
+        let tree = create(&repo.0.join("worktrees"), &root, "existing", "HEAD", true).unwrap();
+        assert!(create(&repo.0.join("worktrees"), &root, "existing", "HEAD", true).is_err());
+        assert!(create(&repo.0.join("worktrees"), &root, "main", "HEAD", true).is_err());
+        assert!(create(&repo.0.join("worktrees"), &root, "bad name", "HEAD", false).is_err());
+        assert!(create(&repo.0.join("worktrees"), &root, "valid", "--help", false).is_err());
         git_checked(&root, &["worktree", "lock", &tree.path]).unwrap();
         assert!(remove(&root, Path::new(&tree.path), true).is_err());
         assert!(remove(&root, &repo.0, true).is_err());
@@ -933,7 +1093,14 @@ mod tests {
     fn renames_only_temporary_worktree_branches() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "mc/12345678", "main", false).unwrap();
+        let tree = create(
+            &repo.0.join("worktrees"),
+            &root,
+            "mc/12345678",
+            "main",
+            false,
+        )
+        .unwrap();
         let renamed = rename_branch(&root, Path::new(&tree.path), "mc/faster-worktrees").unwrap();
         assert_eq!(renamed.branch.as_deref(), Some("mc/faster-worktrees"));
         assert!(git(
@@ -943,7 +1110,14 @@ mod tests {
         .is_ok());
         assert!(rename_branch(&root, &root, "mc/nope").is_err());
 
-        let regular = create(&root, "feature/manual", "main", false).unwrap();
+        let regular = create(
+            &repo.0.join("worktrees"),
+            &root,
+            "feature/manual",
+            "main",
+            false,
+        )
+        .unwrap();
         assert!(rename_branch(&root, Path::new(&regular.path), "mc/should-not-change").is_err());
     }
 
@@ -951,7 +1125,7 @@ mod tests {
     fn removal_preflight_is_read_only_and_rejects_blockers() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&repo.0.join("worktrees"), &root, "feature", "main", false).unwrap();
         let path = Path::new(&tree.path);
         std::fs::write(path.join("keep-me"), "local changes").unwrap();
         assert!(check_removal(&root, path, true, true)
@@ -974,7 +1148,7 @@ mod tests {
     fn references_include_archived_sessions_and_directly_opened_worktrees() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&repo.0.join("worktrees"), &root, "feature", "main", false).unwrap();
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         for (id, cwd, worktree, archived) in [
@@ -1001,7 +1175,7 @@ mod tests {
     fn removal_preserves_shared_archived_and_direct_sessions() {
         let repo = repo();
         let root = repo.0.join("repo").canonicalize().unwrap();
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&repo.0.join("worktrees"), &root, "feature", "main", false).unwrap();
         let path = Path::new(&tree.path);
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
@@ -1087,7 +1261,7 @@ mod tests {
         for git_removed in [false, true] {
             let repo = repo();
             let root = repo.0.join("repo");
-            let tree = create(&root, "feature", "main", false).unwrap();
+            let tree = create(&repo.0.join("worktrees"), &root, "feature", "main", false).unwrap();
             let main = list(&root).unwrap().remove(0).path;
             let db = repo.0.join("sessions.db");
             {
@@ -1152,7 +1326,7 @@ mod tests {
     fn database_failures_keep_worktree_and_session_state_consistent() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&repo.0.join("worktrees"), &root, "feature", "main", false).unwrap();
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         conn.execute(
