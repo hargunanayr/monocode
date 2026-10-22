@@ -1171,6 +1171,11 @@ export const KEYBINDINGS: KeybindingRow[] = [
     when: "Always",
   },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },
+  {
+    command: "View: Switch Chat / Explore",
+    keys: `${MOD}E`,
+    when: "Classic layout",
+  },
   { command: "App: Toggle Mono", keys: `${MOD}I`, when: "Project with a mono" },
   {
     command: "Composer: Toggle Workspace",

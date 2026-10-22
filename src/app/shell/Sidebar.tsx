@@ -75,6 +75,11 @@ import {
   type GitHistoryCommit,
 } from "../../platform/tauri/fs";
 import { MOD, SHIFT } from "../../platform/tauri/platform";
+import {
+  workspaceViewOfSidebarTab,
+  type WorkspaceView,
+} from "../../features/workspace/model/workspaceView";
+import { WorkspaceViewSwitch } from "../../features/workspace/ui/WorkspaceViewSwitch";
 import { useTrafficLightsVisible } from "../../platform/tauri/useTrafficLightsVisible";
 import { copyText } from "../../platform/tauri/clipboard";
 import { resolveModel } from "../../features/sessions/model/models";
@@ -343,6 +348,9 @@ type Props = {
   onFileDeleted?: (path: string) => void;
   tab: SidebarTab;
   onTabChange: (tab: SidebarTab) => void;
+  /** Chat or Explore; absent where the layout has no modes. */
+  workspaceView?: WorkspaceView;
+  onSwitchWorkspaceView?: (mode: WorkspaceView) => void;
   filesSearchOpen: boolean;
   onFilesSearchOpenChange: (open: boolean) => void;
   onOpenFilesSearch?: () => void;
@@ -456,6 +464,8 @@ function SidebarComponent({
   onFileDeleted,
   tab: requestedTab,
   onTabChange,
+  workspaceView,
+  onSwitchWorkspaceView,
   filesSearchOpen,
   onFilesSearchOpenChange,
   onOpenFilesSearch,
@@ -937,6 +947,12 @@ function SidebarComponent({
   const sessionHarnesses = harnessesInSessions(projectSessions);
   const narrowedByUser = searchNarrowed || filtersActive;
   const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  // Chat shows Sessions; Explore shows Explorer and Git.
+  const modeTabs = workspaceView
+    ? visibleTabs.filter(
+        (itemId) => workspaceViewOfSidebarTab(itemId) === workspaceView,
+      )
+    : visibleTabs;
   const onReorderTabs = (ids: SidebarTab[]) => {
     const reordered = new Set(ids);
     let index = 0;
@@ -950,7 +966,7 @@ function SidebarComponent({
     setRightTabOrder(tabs);
     saveRightPanelTabOrder(tabs);
   };
-  const sortable = useAnimatedReorder(visibleTabs, onReorderTabs);
+  const sortable = useAnimatedReorder(modeTabs, onReorderTabs);
   const visibleFolderIds = sessionListEntries.flatMap((entry) =>
     entry.kind === "folder" ? [entry.folder.id] : [],
   );
@@ -2072,7 +2088,14 @@ function SidebarComponent({
         .join(" ")
     : "Changes";
 
-  const workspaceTabItems = visibleTabs.map((itemId) => {
+  const modeSwitch =
+    workspaceView && onSwitchWorkspaceView ? (
+      <WorkspaceViewSwitch
+        mode={workspaceView}
+        onChange={onSwitchWorkspaceView}
+      />
+    ) : null;
+  const workspaceTabItems = modeTabs.map((itemId) => {
     const active = tab === itemId;
     const isChangesTab = itemId === "changes";
     return (
@@ -2572,6 +2595,7 @@ function SidebarComponent({
               aria-label="Workspace"
               className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2"
             >
+              {modeSwitch}
               {workspaceTabItems}
             </div>
           )}
@@ -2624,6 +2648,7 @@ function SidebarComponent({
               aria-label="Workspace"
               className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
             >
+              {modeSwitch}
               {workspaceTabItems}
             </div>
           ) : null}
