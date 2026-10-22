@@ -1,7 +1,9 @@
 import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -27,6 +29,19 @@ export type HostWorktree = {
   missing: boolean;
 };
 export type HostWorktrees = { worktrees: HostWorktree[]; defaultRoot: string };
+
+/** One folder per repository, away from the project and its parent. The hash
+ * keeps two projects with the same folder name apart. */
+function defaultRoot(main: string): string {
+  const home =
+    process.env.MONOCODE_WORKTREES_DIR ||
+    join(homedir(), ".monocode", "worktrees");
+  const hash = createHash("sha256").update(main).digest("hex").slice(0, 8);
+  return join(
+    available(home) ? realpathSync.native(home) : home,
+    `${basename(main)}-${hash}`,
+  );
+}
 
 function parse(text: string): HostWorktree[] {
   const trees: HostWorktree[] = [];
@@ -122,7 +137,7 @@ export async function hostWorktrees(cwd: string): Promise<HostWorktrees> {
   if (!main) throw new Error("No working copies found");
   return {
     worktrees,
-    defaultRoot: join(dirname(main.path), `${basename(main.path)}-worktrees`),
+    defaultRoot: defaultRoot(main.path),
   };
 }
 
@@ -154,9 +169,10 @@ export async function createHostWorktree(
       "This branch already has a working copy. Select it from the picker.",
     );
   const slug = `wt-${branch.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const path = join(listed.defaultRoot, slug);
-  if (existsSync(path))
-    throw new Error(`${path} already exists. Choose another branch name.`);
+  if (existsSync(join(listed.defaultRoot, slug)))
+    throw new Error(
+      `${join(listed.defaultRoot, slug)} already exists. Choose another branch name.`,
+    );
   const refs = (
     await exec(
       "git",
@@ -184,6 +200,8 @@ export async function createHostWorktree(
     )
   ).stdout.trim();
   await mkdir(listed.defaultRoot, { recursive: true });
+  // Git lists the resolved path; match it when the home folder is a symlink.
+  const path = join(realpathSync.native(listed.defaultRoot), slug);
   if (existing)
     await exec("git", ["worktree", "add", "--", path, branch], options(cwd));
   else

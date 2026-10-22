@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
@@ -11,16 +11,23 @@ import {
   RefreshCw,
   Trash2,
 } from "../../../shared/ui/icons";
-import { revealPath } from "../../../platform/tauri/fs";
+import { pickFolder, revealPath } from "../../../platform/tauri/fs";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
-import { loadArchivedProjects, type RecentProject } from "../../projects/model/recents";
+import {
+  isLocalProject,
+  loadArchivedProjects,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type { Session } from "../../sessions/model/session";
 import {
   checkWorktreeRemoval,
+  setWorktreeLocation,
+  worktreeLocation,
   worktreeSessionIds,
   type RemoveWorktree,
   type Worktree,
+  type WorktreeLocation,
 } from "../model/worktrees";
 
 export function WorktreesPage({
@@ -64,6 +71,27 @@ export function WorktreesPage({
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Worktree>();
   const [refreshingAfterFailure, setRefreshingAfterFailure] = useState(false);
+  const [location, setLocation] = useState<WorktreeLocation>();
+  useEffect(() => {
+    void worktreeLocation().then(setLocation, () => {});
+  }, []);
+  // Remote projects use the folder on their own machine.
+  const local = !!project && isLocalProject(project);
+  const moveLocation = async (root: string | null) => {
+    setError(undefined);
+    try {
+      setLocation(await setWorktreeLocation(root));
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const chooseLocation = async () => {
+    const root = await pickFolder("Choose where new worktrees go").catch(
+      () => null,
+    );
+    if (root) await moveLocation(root);
+  };
   return (
     <div
       data-setting-id="project-worktrees"
@@ -227,9 +255,33 @@ export function WorktreesPage({
         </div>
       )}
       {data && (
-        <p className="break-all text-[11px] text-content/40">
-          New worktrees are created in {prettyCwd(data.defaultRoot)}.
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="min-w-0 flex-1 break-all text-[11px] text-content/40">
+            New worktrees are created in {prettyCwd(data.defaultRoot)}.
+          </p>
+          {local && location && (
+            <div className="flex shrink-0 items-center gap-1">
+              {location.custom && (
+                <button
+                  type="button"
+                  title={`Create worktrees in ${prettyCwd(location.standard)}`}
+                  onClick={() => void moveLocation(null)}
+                  className="h-6 rounded-md px-2 text-[11px] text-content/55 hover:bg-content/8 hover:text-content active:scale-[0.97]"
+                >
+                  Use default
+                </button>
+              )}
+              <button
+                type="button"
+                title={`Worktrees of every local project go in a folder of their own under ${prettyCwd(location.root)}. Existing worktrees stay where they are.`}
+                onClick={() => void chooseLocation()}
+                className="h-6 rounded-md px-2 text-[11px] text-content/55 hover:bg-content/8 hover:text-content active:scale-[0.97]"
+              >
+                Change folder
+              </button>
+            </div>
+          )}
+        </div>
       )}
       {creating && (
         <CreateWorktreeDialog
