@@ -345,7 +345,7 @@ function groupTranscriptTurns(
     // message. Dropping it here folds the reply into the turn above, so a
     // supervised run reads as one conversation.
     if (block.internal && !managed) {
-      if (isMonoCompletionPrompt(block)) {
+      if (isMonoCompletionPrompt(block) || isMonoPeerPrompt(block)) {
         if (current.length > 0) turns.push(current);
         // Mono replies need a stable turn before their first output arrives.
         // Keep the hidden prompt as its identity and timing, not visible text.
@@ -395,6 +395,11 @@ export function isMonoCompletionPrompt(block: Block): boolean {
       (block.role === "user" &&
         !!block.appRequestId?.startsWith("mono-completion-")))
   );
+}
+
+/** The hidden turn that carries another Mono's message; it opens a turn of its own. */
+export function isMonoPeerPrompt(block: Block): boolean {
+  return !!block.internal && block.role === "user" && !!block.monoPeerMessage;
 }
 
 /** A message this long after the one before gets its own day and time. */

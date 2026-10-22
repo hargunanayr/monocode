@@ -1,5 +1,6 @@
 import type { Block, Session } from "../../sessions/model/session";
 import { operatorUserPrompt } from "../../sessions/model/operatorCommand";
+import { monoPeerLabel } from "../../monos/model/monoPeerMessages";
 
 type Exchange = { user: Block; assistants: Block[] };
 
@@ -33,7 +34,9 @@ export function sessionConversationPage(
   for (const block of session.blocks) {
     if (
       block.role === "user" &&
-      (!block.internal || block.monoSessionCompletion) &&
+      (!block.internal ||
+        block.monoSessionCompletion ||
+        block.monoPeerMessage) &&
       !block.draft
     ) {
       exchanges.push({ user: block, assistants: [] });
@@ -67,7 +70,9 @@ export function sessionConversationPage(
           ? user.monoSessionCompletion.sessionCount
             ? `MonoCode: results from ${user.monoSessionCompletion.sessionCount} sessions`
             : `MonoCode: session ${user.monoSessionCompletion.status}: ${user.monoSessionCompletion.title}`
-          : operatorUserPrompt(user),
+          : user.monoPeerMessage
+            ? `${monoPeerLabel(user.monoPeerMessage)}: ${user.monoPeerMessage.message}`
+            : operatorUserPrompt(user),
         maxChars,
       ),
       assistant: assistants.length

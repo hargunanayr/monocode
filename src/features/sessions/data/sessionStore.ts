@@ -189,6 +189,29 @@ function persistableMeta(
   };
 }
 
+function sanitizeMonoPeerMessage(value: unknown): Block["monoPeerMessage"] {
+  if (!value || typeof value !== "object") return undefined;
+  const peer = value as NonNullable<Block["monoPeerMessage"]>;
+  if (
+    typeof peer.fromMonoId !== "string" ||
+    !isPersistableId(peer.fromMonoId) ||
+    typeof peer.fromName !== "string" ||
+    typeof peer.threadId !== "string" ||
+    !isPersistableId(peer.threadId) ||
+    !Number.isInteger(peer.hop) ||
+    peer.hop < 1 ||
+    typeof peer.message !== "string"
+  )
+    return undefined;
+  return {
+    fromMonoId: peer.fromMonoId,
+    fromName: peer.fromName.slice(0, 200),
+    threadId: peer.threadId,
+    hop: peer.hop,
+    message: peer.message,
+  };
+}
+
 function sanitizeMonoSessionCompletion(
   value: unknown,
 ): Block["monoSessionCompletion"] {
@@ -257,6 +280,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
     const completion = sanitizeMonoSessionCompletion(
       message.monoSessionCompletion,
     );
+    const peer = sanitizeMonoPeerMessage(message.monoPeerMessage);
     const noteCard =
       noteMeta && typeof message.noteCard?.body === "string"
         ? { ...noteMeta, body: message.noteCard.body }
@@ -288,6 +312,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
         ...(completion ? { monoSessionCompletion: completion } : {}),
+        ...(peer ? { monoPeerMessage: peer } : {}),
         ...(["default", "plan", "build", "orchestrate"].includes(
           message.intent ?? "",
         )
@@ -1012,6 +1037,9 @@ function sanitizeBlock(
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
   if (block.role === "user" && block.internal && completion)
     next.monoSessionCompletion = completion;
+  const peer = sanitizeMonoPeerMessage(block.monoPeerMessage);
+  if (block.role === "user" && block.internal && peer)
+    next.monoPeerMessage = peer;
   const spawned = sanitizeMonoSpawnedSessions(block.monoSpawnedSessions);
   if (block.role === "user" && spawned.length)
     next.monoSpawnedSessions = spawned;

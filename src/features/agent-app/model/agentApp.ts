@@ -13,6 +13,7 @@ import {
   RUNTIME_MODE_LABEL,
   RUNTIME_MODES,
   type HarnessId,
+  type QueuedMessage,
   type Session,
 } from "../../sessions/model/session";
 import {
@@ -58,11 +59,18 @@ import {
   type Habit,
 } from "../../monos/model/monoHabits";
 import {
+  defaultSoul,
   memoryWithinBudget,
   MonoFileConflict,
   type AgentFilePath,
   type MonoFiles,
 } from "../../monos/model/monoFiles";
+import {
+  MONO_MESSAGE_MAX_CHARS,
+  MONO_THREAD_MAX_HOPS,
+  monoPeerQueuedMessage,
+  nextPeerHop,
+} from "../../monos/model/monoPeerMessages";
 import {
   addMemoryEntry,
   archiveMemoryEntries,
@@ -164,6 +172,15 @@ export type AgentAppHost = {
     text: string,
     hash: string,
   ): Promise<string>;
+  /** Every Mono, which a Mono's own conversation may message. */
+  monos?: {
+    list(): { id: string; name: string; projects: readonly string[] }[];
+    /** Queues the message in the Mono's chat, opening the chat if needed. */
+    deliver(
+      monoId: string,
+      message: QueuedMessage,
+    ): Promise<{ alreadySent: boolean }>;
+  };
   /** The clock entries are dated by; tests pin it. */
   now?(): Date;
 };
@@ -220,6 +237,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
   ["chat.card", [...CARD_FIELDS]],
+  ["monos.list", []],
+  ["monos.send", ["monoId", "message"]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -499,6 +518,118 @@ function memoryPath(topic: unknown): AgentFilePath {
   return topic === undefined
     ? "MEMORY.md"
     : `memory/${topicName(requiredString(topic, "topic", 80))}.md`;
+}
+
+const SOUL_EXCERPT_CHARS = 600;
+
+/** Who another Mono is, from the start of its soul; none while it is the default. */
+function soulExcerpt(soul: string): string | null {
+  if (soul.trim() === defaultSoul().trim()) return null;
+  const text = soul
+    .replace(/^\s*#\s*Soul\s*\n/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return null;
+  return text.length <= SOUL_EXCERPT_CHARS
+    ? text
+    : `${text.slice(0, SOUL_EXCERPT_CHARS - 1).trimEnd()}…`;
+}
+
+/** The other Mono a message is for, by its ID or its name. */
+function peerMono(
+  monos: readonly { id: string; name: string }[],
+  selfId: string,
+  value: unknown,
+): { id: string; name: string } {
+  const named = requiredString(value, "monoId", 200);
+  const others = monos.filter((mono) => mono.id !== selfId);
+  const choices = () =>
+    others.length
+      ? others.map((mono) => `${mono.name} (${mono.id})`).join(", ")
+      : "none; the user adds Monos from the rail";
+  if (named === selfId) throw new Error("A Mono cannot message itself");
+  const byId = others.find((mono) => mono.id === named);
+  if (byId) return byId;
+  const byName = others.filter(
+    (mono) => mono.name.toLowerCase() === named.toLowerCase(),
+  );
+  if (byName.length === 1) return byName[0];
+  throw new Error(
+    byName.length
+      ? `Several Monos are named ${named}; pass monoId. Others: ${choices()}`
+      : `No other Mono is ${named}. Others: ${choices()}`,
+  );
+}
+
+async function handleMonos(
+  source: Session,
+  requestId: string,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentAppHost,
+): Promise<unknown> {
+  const selfId = host.isMono(source.id)
+    ? host.monoOf?.(source.id)?.id
+    : undefined;
+  if (!selfId || !host.monos)
+    throw new Error("Only a Mono's own conversation can talk to other Monos");
+  const monos = host.monos.list();
+  if (action === "monos.list") {
+    return {
+      monos: await Promise.all(
+        monos.map(async (mono) => ({
+          id: mono.id,
+          name: mono.name,
+          ...(mono.id === selfId ? { you: true } : {}),
+          projects: mono.projects.map((path) => ({
+            name: projectName(path),
+            path,
+          })),
+          soul: await host
+            .agentFiles(mono.id)
+            .then((files) => soulExcerpt(files.soul))
+            .catch(() => null),
+        })),
+      ),
+    };
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+    throw new Error("Invalid request ID");
+  const target = peerMono(monos, selfId, input.monoId);
+  if (
+    typeof input.message !== "string" ||
+    !input.message.trim() ||
+    input.message.length > MONO_MESSAGE_MAX_CHARS
+  )
+    throw new Error(
+      `message must be a non-empty string under ${MONO_MESSAGE_MAX_CHARS} characters`,
+    );
+  const id = `mono-message-${selfId}-${requestId}`;
+  const { threadId, hop } = nextPeerHop(source.blocks, id);
+  if (hop > MONO_THREAD_MAX_HOPS)
+    throw new Error(
+      `This thread between Monos has reached its limit of ${MONO_THREAD_MAX_HOPS} messages. Do not send more; tell the user here what came of it.`,
+    );
+  const fromName =
+    monos.find((mono) => mono.id === selfId)?.name ?? "Another Mono";
+  const result = await host.monos.deliver(
+    target.id,
+    monoPeerQueuedMessage(id, {
+      fromMonoId: selfId,
+      fromName,
+      threadId,
+      hop,
+      message: input.message.replace(/\r\n?/g, "\n").trim(),
+    }),
+  );
+  return {
+    sentTo: target,
+    threadId,
+    hop,
+    remaining: MONO_THREAD_MAX_HOPS - hop,
+    ...result,
+    note: `${target.name} reads it once idle. Its reply, if any, arrives in this chat as a new message; do not wait or poll for it.`,
+  };
 }
 
 async function handleSoul(
@@ -956,6 +1087,8 @@ export async function handleAgentApp(
     return handleMemory(source, action, input, host);
   if (action.startsWith("habits."))
     return handleHabits(source, action, input, host);
+  if (action.startsWith("monos."))
+    return handleMonos(source, requestId, action, input, host);
   if (action === "chat.card") {
     if (
       !host.postCard ||

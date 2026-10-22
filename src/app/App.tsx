@@ -924,6 +924,7 @@ type SubmitOptions = ComposerTurnOptions & {
   /** An app request that may arrive mid-turn, steering or queuing as one typed here would. */
   followsUp?: boolean;
   monoSessionCompletion?: Block["monoSessionCompletion"];
+  monoPeerMessage?: Block["monoPeerMessage"];
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
   refreshTitle?: boolean;
@@ -8048,11 +8049,16 @@ function Workspace({
           ? { appRequestId: options.appRequestId }
           : {}),
         // The orchestrator writes these turns, not the user; hide them.
-        ...(options?.managed || options?.monoSessionCompletion
+        ...(options?.managed ||
+        options?.monoSessionCompletion ||
+        options?.monoPeerMessage
           ? { internal: true }
           : {}),
         ...(options?.monoSessionCompletion
           ? { monoSessionCompletion: options.monoSessionCompletion }
+          : {}),
+        ...(options?.monoPeerMessage
+          ? { monoPeerMessage: options.monoPeerMessage }
           : {}),
       };
       const live = isLiveHarness(current.harness);
@@ -9687,6 +9693,12 @@ function Workspace({
                 ...(head.monoSessionCompletion
                   ? {
                       monoSessionCompletion: head.monoSessionCompletion,
+                      appRequestId: head.id,
+                    }
+                  : {}),
+                ...(head.monoPeerMessage
+                  ? {
+                      monoPeerMessage: head.monoPeerMessage,
                       appRequestId: head.id,
                     }
                   : {}),
@@ -11939,6 +11951,41 @@ function Workspace({
               );
             },
             habits: { load: loadHabits, update: updateHabits },
+            monos: {
+              list: () =>
+                listMonos().map((mono) => ({
+                  id: mono.id,
+                  name: monoLook(mono).name,
+                  projects: mono.projects,
+                })),
+              deliver: async (monoId, message) => {
+                // A Mono not opened yet gets its chat now, as opening it would.
+                const conversation = await ensureMonoSession(monoId, {
+                  home: homeDir,
+                  load: ensureOpenSessionRef.current,
+                  create: (path) => newDefaultSession(path),
+                  add: (created) =>
+                    updateSessionState(sessionsRef, setSessions, (current) => [
+                      ...current,
+                      created,
+                    ]),
+                });
+                if (!conversation)
+                  throw new Error("That Mono is no longer available");
+                const alreadySent =
+                  !!conversation.queuedMessages?.some(
+                    (entry) => entry.id === message.id,
+                  ) ||
+                  conversation.blocks.some(
+                    (block) => block.appRequestId === message.id,
+                  );
+                await queueMonoSessionCompletionRef.current(
+                  conversation.id,
+                  message,
+                );
+                return { alreadySent };
+              },
+            },
             agentFiles: (monoId) => loadMonoFiles(monoId),
             readAgentFile: (monoId, path) => readAgentFile(monoId, path),
             writeAgentFile: (monoId, path, text, hash) =>
