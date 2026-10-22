@@ -260,10 +260,12 @@ import {
   openChangesTab,
   openCommitTab,
   newAgentTab,
+  newCommitTab,
   openEditorTab,
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
+  openWorkspaceChanges,
   previewWorkspaceFile,
   openTerminalTab,
   removePane,
@@ -4430,6 +4432,52 @@ function Workspace({
     [inboxAskPortal, closeMonoView],
   );
 
+  /** Top-bar file tabs: Git reviews get their own workspace tab, as files do. */
+  const openInWorkspaceTab = useCallback(
+    (
+      open: (tabs: WorkspaceTab[]) => {
+        tabs: WorkspaceTab[];
+        tabId: string;
+        paneId?: string;
+      },
+    ) => {
+      let target: { tabId: string; paneId?: string } | undefined;
+      // Select inside the updater so back-to-back opens see each other.
+      flushSync(() => {
+        setTabs((prev) => {
+          const result = open(prev);
+          target = result;
+          return result.tabs;
+        });
+      });
+      if (target?.paneId) activateTab(target.tabId, target.paneId);
+      else if (target) setActiveTabId(target.tabId);
+      setProjectTerminalFocused(false);
+      setComposerFocused(false);
+    },
+    [activateTab],
+  );
+
+  /** A previewable Git file or commit in top-bar mode. */
+  const openWorkspaceReviewFile = useCallback(
+    (file: FilePaneTab, projectCwd: string | undefined, pin = false) => {
+      // Built once: the updater may run twice in StrictMode.
+      const created = newEditorWorkspaceTab(
+        pin ? file : { ...file, preview: true },
+      );
+      openInWorkspaceTab((prev) =>
+        openWorkspaceFile(
+          prev,
+          file,
+          created,
+          (tabs, tab) => insertBesideActive(tabs, tab, projectCwd),
+          pin,
+        ),
+      );
+    },
+    [openInWorkspaceTab, insertBesideActive],
+  );
+
   const onOpenDiff = useCallback(
     (
       path?: string,
@@ -4450,6 +4498,29 @@ function Workspace({
             : ((await resolveOpenablePath(diffCwd, path)) ?? path)
           : undefined;
         if (resolved) rememberOpenedFile(diffCwd, resolved);
+        if (!session && loadFileTabMode() === "workspace") {
+          closeMonoView();
+          if (loadDiffViewer() === "unified") {
+            openInWorkspaceTab((prev) =>
+              openWorkspaceChanges(
+                prev,
+                diffCwd,
+                (tabs, tab) => insertBesideActive(tabs, tab, diffProjectCwd),
+                resolved,
+                changeKind,
+                diffProjectCwd,
+              ),
+            );
+          } else if (resolved) {
+            openWorkspaceReviewFile(
+              newFileTab(resolved, diffCwd, true, changeKind, diffProjectCwd),
+              diffProjectCwd,
+              pin,
+            );
+          }
+          setSidebarTab("changes", diffProjectCwd);
+          return;
+        }
         setTabs((prev) =>
           prev.map((tab) => {
             if (tab.id !== activeTabId) return tab;
@@ -4484,7 +4555,13 @@ function Workspace({
         setComposerFocused(false);
       })();
     },
-    [activeTabId],
+    [
+      activeTabId,
+      closeMonoView,
+      insertBesideActive,
+      openInWorkspaceTab,
+      openWorkspaceReviewFile,
+    ],
   );
 
   // A Mono view covers the workspace, so its session changes open on the
@@ -4520,6 +4597,21 @@ function Workspace({
   /** Stack one section's working-tree changes in one review, whatever the diff-view setting. */
   const onOpenAllChanges = useCallback(
     (kind: GitFileDiffKind) => {
+      if (loadFileTabMode() === "workspace") {
+        const projectCwd = sidebarCwdRef.current;
+        closeMonoView();
+        openInWorkspaceTab((prev) =>
+          openWorkspaceChanges(
+            prev,
+            gitCwdRef.current,
+            (tabs, tab) => insertBesideActive(tabs, tab, projectCwd),
+            undefined,
+            kind,
+            projectCwd,
+          ),
+        );
+        return;
+      }
       setTabs((prev) =>
         prev.map((tab) =>
           tab.id === activeTabId
@@ -4535,11 +4627,29 @@ function Workspace({
       );
       setComposerFocused(false);
     },
-    [activeTabId],
+    [activeTabId, closeMonoView, insertBesideActive, openInWorkspaceTab],
   );
 
   const onOpenCommit = useCallback(
     (commit: GitHistoryCommit, pin?: boolean) => {
+      if (loadFileTabMode() === "workspace") {
+        const projectCwd = sidebarCwdRef.current;
+        closeMonoView();
+        openWorkspaceReviewFile(
+          newCommitTab(
+            gitCwdRef.current,
+            {
+              sha: commit.sha,
+              shortSha: commit.shortSha,
+              subject: commit.subject,
+            },
+            projectCwd,
+          ),
+          projectCwd,
+          pin,
+        );
+        return;
+      }
       setTabs((prev) =>
         prev.map((tab) =>
           tab.id === activeTabId
@@ -4559,7 +4669,7 @@ function Workspace({
       );
       setComposerFocused(false);
     },
-    [activeTabId],
+    [activeTabId, closeMonoView, openWorkspaceReviewFile],
   );
 
   const onShowSourceControl = useCallback(() => {

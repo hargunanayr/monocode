@@ -34,6 +34,7 @@ import {
   openSessionChangesTab,
   pinEditorFile,
   openWorkspaceFile,
+  openWorkspaceChanges,
   openTerminalTab,
   paneEdgeFromPoint,
   placePane,
@@ -160,6 +161,56 @@ describe("preview tabs", () => {
     tabs = open(tabs, "/r/d.ts", "/r", true);
     tabs = open(tabs, "/r/e.ts", "/r");
     expect(files()).toEqual([["/r/e.ts"], ["/other/c.ts"], ["/r/d.ts"]]);
+  });
+
+  it("workspace mode: a working-tree review opens as its own top tab", () => {
+    const append = (tabs: WorkspaceTab[], tab: WorkspaceTab) => [...tabs, tab];
+    const file = newFileTab("/r/a.ts", "/r", true, "unstaged");
+    const created = newEditorWorkspaceTab({ ...file, preview: true });
+    const session = newTab("s");
+    const { tabs, tabId } = openWorkspaceFile(
+      [session],
+      file,
+      created,
+      append,
+    );
+    expect(tabs[0]).toBe(session);
+    expect(tabId).toBe(created.id);
+    expect(tabs[1].editorPanes[0].files[0]).toMatchObject({
+      path: "/r/a.ts",
+      review: true,
+      changeKind: "unstaged",
+    });
+  });
+
+  it("workspace mode: the Changes tab is reused and retargeted", () => {
+    const append = (tabs: WorkspaceTab[], tab: WorkspaceTab) => [...tabs, tab];
+    const first = openWorkspaceChanges(
+      [newTab("s")],
+      "/r",
+      append,
+      "/r/a.ts",
+      "unstaged",
+    );
+    expect(first.tabs).toHaveLength(2);
+    expect(first.tabs[0].editorPanes).toEqual([]);
+    const second = openWorkspaceChanges(
+      first.tabs,
+      "/r",
+      append,
+      "/r/b.ts",
+      "staged",
+    );
+    expect(second.tabs).toHaveLength(2);
+    expect(second.tabId).toBe(first.tabId);
+    expect(second.paneId).toBe(second.tabs[1].editorPanes[0].id);
+    expect(second.tabs[1].editorPanes[0].files).toEqual([
+      expect.objectContaining({
+        path: "/r/b.ts",
+        changes: true,
+        changeKind: "staged",
+      }),
+    ]);
   });
 });
 
