@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { leaf, newTab, newTerminalFile } from "../../workspace/model/layout";
+import {
+  isTerminalWorkspaceTab,
+  leaf,
+  newTab,
+  newTerminalFile,
+} from "../../workspace/model/layout";
 import {
   addTerminalToDock,
   applyDockGridStyle,
@@ -7,6 +12,7 @@ import {
   closeTerminalInDock,
   createProjectTerminal,
   dockGridStyle,
+  dockTerminalTabs,
   findProjectTerminal,
   focusedDockTerminalId,
   mapProjectTerminal,
@@ -247,5 +253,28 @@ describe("splitProjectTerminalsForMove", () => {
     const allA = splitProjectTerminalsForMove(docks, [a1, a2], [b1], sessions);
     expect(allA.moving.map((dock) => dock.projectPath)).toEqual(["/tmp/a"]);
     expect(allA.remaining.map((dock) => dock.projectPath)).toEqual(["/tmp/b"]);
+  });
+});
+
+describe("dockTerminalTabs", () => {
+  it("reopens each docked terminal as its own terminal tab in the project", () => {
+    const first = newTerminalFile("/tmp/a", "a");
+    const second = newTerminalFile("/tmp/a/sub", "sub");
+    const dock = addTerminalToDock(createProjectTerminal("/tmp/a", first), second);
+
+    const tabs = dockTerminalTabs([dock]);
+
+    expect(tabs).toHaveLength(2);
+    expect(tabs.every(isTerminalWorkspaceTab)).toBe(true);
+    expect(tabs.map((tab) => tab.terminalPanes?.[0]?.files[0]?.id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(tabs[0].terminalPanes?.[0]?.files[0]?.projectCwd).toBeUndefined();
+    expect(tabs[1].terminalPanes?.[0]?.files[0]?.projectCwd).toBe("/tmp/a");
+  });
+
+  it("has nothing to reopen without docks", () => {
+    expect(dockTerminalTabs([])).toEqual([]);
   });
 });

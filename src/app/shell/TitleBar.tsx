@@ -108,6 +108,11 @@ export type Tab = {
   previewFileId?: string;
 };
 
+const NEW_TAB_MENU_ITEMS: ExplorerMenuItem[] = [
+  { kind: "item", id: "session", label: "New Session", shortcut: `${MOD}T` },
+  { kind: "item", id: "terminal", label: "New Terminal", shortcut: `${MOD}\`` },
+];
+
 /** How far below the tab bar a dragged tab must go before it targets a pane. */
 const PANE_DROP_PULL = 32;
 
@@ -155,8 +160,10 @@ type Props = {
   onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
   onNewTerminal?: () => void;
-  /** Inset layout: a new session, from the end of the tabs. */
+  /** A new session, from the `+` at the end of the tabs. */
   onNewSession?: () => void;
+  /** With a new session, the `+` offers a terminal tab beside it. */
+  onNewTerminalTab?: () => void;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
   onOpenNotes?: () => void;
@@ -767,6 +774,7 @@ function TitleBarComponent({
   onSelect,
   onNewTerminal,
   onNewSession,
+  onNewTerminalTab,
   onOpenSettings,
   onOpenInbox,
   onOpenNotes,
@@ -850,6 +858,12 @@ function TitleBarComponent({
     x: number;
     y: number;
   } | null>(null);
+  const [newTabMenu, setNewTabMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  // Pressing `+` while its menu is open dismisses the menu, and the click
+  // that follows must not open it again.
+  const newTabMenuWasOpen = useRef(false);
   const syncTabOverflow = useCallback(() => {
     const el = tabStripRef.current;
     const next = el
@@ -1329,11 +1343,34 @@ function TitleBarComponent({
                 // Sized and plated like an inactive tab beside it.
                 <button
                   type="button"
-                  title={`New session (${MOD}T)`}
-                  aria-label={`New session (${MOD}T)`}
+                  title={onNewTerminalTab ? "New tab" : `New session (${MOD}T)`}
+                  aria-label={
+                    onNewTerminalTab ? "New tab" : `New session (${MOD}T)`
+                  }
+                  aria-haspopup={onNewTerminalTab ? "menu" : undefined}
+                  aria-expanded={onNewTerminalTab ? !!newTabMenu : undefined}
                   data-tauri-drag-region="false"
-                  onClick={onNewSession}
-                  className="ml-0.5 grid size-7.5 shrink-0 cursor-default place-items-center rounded-md bg-content/4 text-content/50 opacity-65 hover:bg-content/7 hover:text-content hover:opacity-100 focus-visible:opacity-100"
+                  onPointerDown={() => {
+                    newTabMenuWasOpen.current = !!newTabMenu;
+                  }}
+                  onClick={(event) => {
+                    if (!onNewTerminalTab) {
+                      onNewSession();
+                      return;
+                    }
+                    if (newTabMenuWasOpen.current) {
+                      newTabMenuWasOpen.current = false;
+                      setNewTabMenu(null);
+                      return;
+                    }
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setNewTabMenu({ x: rect.left, y: rect.bottom + 4 });
+                  }}
+                  className={`ml-0.5 grid size-7.5 shrink-0 cursor-default place-items-center rounded-md hover:bg-content/7 hover:text-content hover:opacity-100 focus-visible:opacity-100 ${
+                    newTabMenu
+                      ? "bg-content/7 text-content opacity-100"
+                      : "bg-content/4 text-content/50 opacity-65"
+                  }`}
                 >
                   <Plus className="size-3.5" strokeWidth={1.75} />
                 </button>
@@ -1351,6 +1388,20 @@ function TitleBarComponent({
         ) : null}
         {trailingControls}
       </div>
+      {newTabMenu && onNewSession && onNewTerminalTab ? (
+        <ExplorerMenu
+          x={newTabMenu.x}
+          y={newTabMenu.y}
+          items={NEW_TAB_MENU_ITEMS}
+          ariaLabel="New tab"
+          onPick={(id) => {
+            setNewTabMenu(null);
+            if (id === "session") onNewSession();
+            else if (id === "terminal") onNewTerminalTab();
+          }}
+          onClose={() => setNewTabMenu(null)}
+        />
+      ) : null}
       {tabMenu && contextTab ? (
         <ExplorerMenu
           x={tabMenu.x}

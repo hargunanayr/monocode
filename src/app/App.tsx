@@ -255,7 +255,8 @@ import {
   newTab,
   newTerminalFile,
   newTerminalWorkspaceTab,
-  nextTerminalTitle,
+  nextTerminalTitleFromFiles,
+  isTerminalWorkspaceTab,
   openChangesTab,
   openCommitTab,
   newAgentTab,
@@ -287,15 +288,13 @@ import {
 } from "./model/releaseNotes";
 import { mergeOrderedSubset, orderByIds } from "../shared/lib/reorder";
 import {
-  addTerminalToDock,
   applyDockGridStyle,
   closeTerminalInDock,
-  createProjectTerminal,
+  dockTerminalTabs,
   findProjectTerminal,
   focusedDockTerminalId,
   isVerticalDock,
   mapProjectTerminal,
-  nextDockTerminalTitle,
   patchProjectTerminals,
   reorderDockTerminals,
   selectDockTerminal,
@@ -1151,11 +1150,16 @@ function Workspace({
   const switchingWorktrees = useRef(new Map<string, string>());
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
-  const [tabs, setTabs] = useState<WorkspaceTab[]>(
-    () => windowTransfer?.tabs ?? resumed?.tabs ?? [seed.tab],
-  );
+  // Terminals are top-level tabs beside the sessions. Ones an older build
+  // left in a project dock reopen as tabs, and the dock stays empty.
+  const [tabs, setTabs] = useState<WorkspaceTab[]>(() => [
+    ...(windowTransfer?.tabs ?? resumed?.tabs ?? [seed.tab]),
+    ...dockTerminalTabs(
+      windowTransfer?.projectTerminals ?? resumed?.projectTerminals ?? [],
+    ),
+  ]);
   const [projectTerminals, setProjectTerminals] = useState<ProjectTerminal[]>(
-    () => windowTransfer?.projectTerminals ?? resumed?.projectTerminals ?? [],
+    [],
   );
   /** Dock side a brand-new project's terminal starts with, persisted in the workspace snapshot. */
   const [lastDockSide, setLastDockSide] = useState<DockSide | null>(
@@ -3200,47 +3204,34 @@ function Workspace({
     setComposerFocused(false);
   }, []);
 
-  const openProjectTerminal = useCallback(
-    (cwd: string) => {
-      const workdir = cwd || projectCwdRef.current;
-      const projectPath = projectCwdRef.current;
-      if (!isLocalProject(projectPath)) return false;
-      setProjectTerminals((prev) => {
-        const existing = findProjectTerminal(prev, projectPath);
-        const file = newTerminalFile(
-          workdir,
-          existing ? nextDockTerminalTitle(existing, workdir) : undefined,
-          projectPath,
-        );
-        if (!existing) {
-          return [
-            ...prev,
-            createProjectTerminal(
-              projectPath,
-              file,
-              lastDockSideRef.current ?? "bottom",
-            ),
-          ];
-        }
-        return mapProjectTerminal(prev, projectPath, (dock) =>
-          addTerminalToDock(dock, file),
-        );
-      });
-      focusProjectTerminal();
-      return true;
-    },
-    [focusProjectTerminal],
-  );
-
   const onOpenTerminal = useCallback(
-    (cwd: string, asWorkspaceTab = false, occupySessionId?: string) => {
+    (cwd: string, occupySessionId?: string) => {
       const workdir = cwd || terminalCwd;
       if (!isLocalProject(projectCwdRef.current) || !isLocalProject(workdir))
         return;
-      if (openProjectTerminal(workdir)) return;
+      const file = newTerminalFile(
+        workdir,
+        nextTerminalTitleFromFiles(
+          tabsRef.current.flatMap((tab) =>
+            (tab.terminalPanes ?? []).flatMap((pane) => pane.files),
+          ),
+          workdir,
+        ),
+        sidebarCwd,
+      );
 
-      if (asWorkspaceTab || !activeTab) {
-        const file = newTerminalFile(workdir, undefined, sidebarCwd);
+      // A terminal is a top-level tab like a session, except that a blank
+      // conversation it was opened from gives up its pane to it.
+      const occupying = occupySessionId
+        ? sessionsRef.current.find((session) => session.id === occupySessionId)
+        : undefined;
+      const host =
+        occupying && isBlankSession(occupying)
+          ? tabsRef.current.find((tab) =>
+              leafIds(tab.layout).includes(occupying.id),
+            )
+          : undefined;
+      if (!occupying || !host) {
         const tab = newTerminalWorkspaceTab(file);
         appendTab(tab, sidebarCwd);
         setActiveTabId(tab.id);
@@ -3248,34 +3239,20 @@ function Workspace({
         return;
       }
 
-      const occupying = sessionsRef.current.find(
-        (session) => session.id === (occupySessionId ?? activeTab.focusedId),
-      );
-      const occupyPaneId =
-        occupying && isBlankSession(occupying) ? occupying.id : undefined;
-      if (occupyPaneId && occupying) {
-        lastPersisted.current.delete(occupyPaneId);
-        void forgetHarnessSession(occupying.harness, occupyPaneId);
-        setSessions((prev) =>
-          prev.filter((session) => session.id !== occupyPaneId),
-        );
-      }
-
-      const file = newTerminalFile(
-        workdir,
-        nextTerminalTitle(activeTab, workdir),
-        sidebarCwd,
+      lastPersisted.current.delete(occupying.id);
+      void forgetHarnessSession(occupying.harness, occupying.id);
+      setSessions((prev) =>
+        prev.filter((session) => session.id !== occupying.id),
       );
       setTabs((prev) =>
         prev.map((tab) =>
-          tab.id === activeTab.id
-            ? openTerminalTab(tab, file, occupyPaneId)
-            : tab,
+          tab.id === host.id ? openTerminalTab(tab, file, occupying.id) : tab,
         ),
       );
+      if (host.id !== activeTabIdRef.current) setActiveTabId(host.id);
       setComposerFocused(false);
     },
-    [terminalCwd, activeTab, appendTab, openProjectTerminal, sidebarCwd],
+    [terminalCwd, appendTab, sidebarCwd],
   );
 
   const onNewTerminal = useCallback(() => {
@@ -3290,36 +3267,50 @@ function Workspace({
       if (session?.worktreeRemoved) return;
       onOpenTerminal(
         session ? sessionWorkCwd(session) : projectCwd,
-        false,
         sessionId,
       );
     },
     [onOpenTerminal, projectCwd],
   );
 
+  // The terminal toggle flips between the project's last terminal tab and the
+  // tab it was reached from.
+  const lastTabOfKind = useRef<{ terminal?: string; other?: string }>({});
+  useEffect(() => {
+    const tab = tabs.find((entry) => entry.id === activeTabId);
+    if (!tab) return;
+    if (isTerminalWorkspaceTab(tab)) lastTabOfKind.current.terminal = tab.id;
+    else lastTabOfKind.current.other = tab.id;
+  }, [activeTabId, tabs]);
+
   const onToggleProjectTerminal = useCallback(() => {
     if (!isLocalProject(projectCwd)) return;
     leaveCoveringMono();
-    const dock = findProjectTerminal(projectTerminalsRef.current, projectCwd);
-    if (!dock) {
-      openProjectTerminal(terminalCwd);
+    const projectTabs = filterTabsForProject(
+      tabsRef.current,
+      sessionsRef.current,
+      projectCwd,
+    );
+    const lastOf = (id: string | undefined, terminal: boolean) =>
+      projectTabs.find(
+        (tab) => tab.id === id && isTerminalWorkspaceTab(tab) === terminal,
+      );
+    const current = projectTabs.find(
+      (tab) => tab.id === activeTabIdRef.current,
+    );
+    if (current && isTerminalWorkspaceTab(current)) {
+      const back =
+        lastOf(lastTabOfKind.current.other, false) ??
+        projectTabs.find((tab) => !isTerminalWorkspaceTab(tab));
+      if (back) activateTab(back.id);
       return;
     }
-    const nextOpen = !dock.open;
-    setProjectTerminals((prev) =>
-      mapProjectTerminal(prev, projectCwd, (entry) =>
-        withDockOpen(entry, nextOpen),
-      ),
-    );
-    if (nextOpen) focusProjectTerminal();
-    else setProjectTerminalFocused(false);
-  }, [
-    terminalCwd,
-    focusProjectTerminal,
-    leaveCoveringMono,
-    openProjectTerminal,
-    projectCwd,
-  ]);
+    const terminal =
+      lastOf(lastTabOfKind.current.terminal, true) ??
+      projectTabs.find(isTerminalWorkspaceTab);
+    if (terminal) activateTab(terminal.id);
+    else onOpenTerminal(terminalCwd);
+  }, [activateTab, terminalCwd, leaveCoveringMono, onOpenTerminal, projectCwd]);
 
   const onHideProjectTerminal = useCallback(() => {
     setProjectTerminals((prev) =>
@@ -3487,9 +3478,7 @@ function Workspace({
     [focusProjectTerminal],
   );
 
-  const onNewTerminalTab = useCallback(() => {
-    onOpenTerminal(terminalCwd, true);
-  }, [terminalCwd, onOpenTerminal]);
+  const onNewTerminalTab = onNewTerminal;
 
   const onCloseTab = useCallback(
     (id: string, opts?: { confirmedTerminalIds?: string[] }) => {
@@ -4240,9 +4229,16 @@ function Workspace({
     );
   }, []);
 
-  /** ⌘T / Ctrl+T: add a dock terminal while the dock has focus, else a tab. */
+  /** ⌘T / Ctrl+T: another terminal tab from a terminal tab, else a session. */
   const onNewFocused = useCallback(() => {
-    if (focusedDockTerminal()) onNewTerminal();
+    const active = tabsRef.current.find(
+      (tab) => tab.id === activeTabIdRef.current,
+    );
+    if (
+      focusedDockTerminal() ||
+      (active && !monoViewIdRef.current && isTerminalWorkspaceTab(active))
+    )
+      onNewTerminal();
     else onNew();
   }, [focusedDockTerminal, onNew, onNewTerminal]);
 
@@ -13941,9 +13937,12 @@ function Workspace({
       onSelect={onSelectTitleTab}
       onNewTerminal={onNewTerminal}
       onNewSession={
-        insetLayout && !settingsOpen && looksLikeProject(sidebarCwd)
+        !settingsOpen && looksLikeProject(sidebarCwd)
           ? onNewFromTitleBar
           : undefined
+      }
+      onNewTerminalTab={
+        !settingsOpen && isLocalProject(sidebarCwd) ? onNewTerminal : undefined
       }
       onOpenSettings={onOpenSettings}
       onOpenInbox={onOpenInbox}
@@ -14086,6 +14085,13 @@ function Workspace({
     />
   );
 
+  const projectHasTerminalTab = useMemo(
+    () =>
+      filterTabsForProject(tabs, sessions, projectCwd).some(
+        isTerminalWorkspaceTab,
+      ),
+    [projectCwd, sessions, tabs],
+  );
   const usageFooter =
     (chromeSurfaceOpen && !(insetLayout && activeAppView)) ||
     (monoCovers && !insetLayout) ? null : (
@@ -14108,12 +14114,10 @@ function Workspace({
             ? onToggleProjectTerminal
             : undefined
         }
-        projectTerminalActive={
-          !monoCovers &&
-          !!currentProjectDock &&
-          currentProjectDock.pane.files.length > 0
+        projectTerminalActive={!monoCovers && projectHasTerminalTab}
+        projectTerminalOpen={
+          !monoCovers && !!activeTab && isTerminalWorkspaceTab(activeTab)
         }
-        projectTerminalOpen={!monoCovers && !!currentProjectDock?.open}
         inset={insetLayout}
       />
     );
