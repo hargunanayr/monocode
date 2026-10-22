@@ -51,9 +51,14 @@ export function LiveAgentsPreview({
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const lockList = useLockOverscroll<HTMLDivElement>();
+  // Two agents open the card; once open it stays until the last one leaves,
+  // so opening a finished session does not hide the others with it.
+  const [open, setOpen] = useState(false);
+  const shown =
+    agents.length >= LIVE_AGENT_MIN || (open && agents.length > 0);
+  if (shown !== open) setOpen(shown);
   const ticking =
-    agents.length >= LIVE_AGENT_MIN &&
-    agents.some((agent) => !agent.done && agent.startedAt != null);
+    shown && agents.some((agent) => !agent.done && agent.startedAt != null);
 
   useEffect(() => {
     if (!ticking) return;
@@ -61,7 +66,7 @@ export function LiveAgentsPreview({
     return () => window.clearInterval(id);
   }, [ticking]);
 
-  if (agents.length < LIVE_AGENT_MIN) return null;
+  if (!shown) return null;
 
   const extra = agents.length - LIVE_AGENT_CAP;
   const visible =

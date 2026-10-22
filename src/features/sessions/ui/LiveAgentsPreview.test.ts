@@ -108,6 +108,38 @@ describe("LiveAgentsPreview", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("b");
   });
 
+  it("waits for two agents, then stays open until the last one leaves", () => {
+    const props = {
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    };
+    const cards = () => container.querySelectorAll("[data-live-agent-card]");
+
+    render({ ...props, agents: [agent("a", "/repo/a")] });
+    expect(cards()).toHaveLength(0);
+
+    render({
+      ...props,
+      agents: [
+        agent("a", "/repo/a", { done: true }),
+        agent("b", "/repo/b", { done: true }),
+      ],
+    });
+    expect(cards()).toHaveLength(2);
+
+    // Opening "a" marks it seen; "b" must stay in view.
+    render({ ...props, agents: [agent("b", "/repo/b", { done: true })] });
+    expect(cards()).toHaveLength(1);
+
+    render({ ...props, agents: [] });
+    expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
+
+    render({ ...props, agents: [agent("c", "/repo/c")] });
+    expect(cards()).toHaveLength(0);
+  });
+
   it("keeps elapsed timers out of its live region", () => {
     render({
       agents: [agent("a", "/repo/a"), agent("b", "/repo/b")],
