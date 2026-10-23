@@ -1209,3 +1209,22 @@ export function contextFromResult(
   if (!used && !window) return undefined;
   return { used: used > 0 ? used : undefined, window };
 }
+
+/**
+ * Context level a `compact_boundary` leaves behind.
+ *
+ * The CLI counts only the rebuilt conversation, not the system prompt and
+ * tools, so this reads a little low until the next request reports in full.
+ * It is still far closer than the level from before the compaction.
+ */
+export function contextUsedFromCompactBoundary(
+  rec: Record<string, unknown>,
+): number | undefined {
+  if (
+    stringField(rec, "type") !== "system" ||
+    stringField(rec, "subtype") !== "compact_boundary"
+  )
+    return undefined;
+  const used = numberField(asRecord(rec.compact_metadata), "post_tokens");
+  return used > 0 ? used : undefined;
+}

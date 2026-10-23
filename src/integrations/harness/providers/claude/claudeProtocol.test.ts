@@ -11,6 +11,7 @@ import {
   buildClaudeUserMessage,
   contextFromResult,
   contextUsedFromAssistant,
+  contextUsedFromCompactBoundary,
   extractExitPlanModePlan,
   isClaudeInitMessage,
   isSubagentMessage,
@@ -765,6 +766,34 @@ describe("helpers", () => {
         compact_metadata: { trigger: "auto" },
       }),
     ).toBe("Compacted context");
+  });
+
+  it("reads the level a compact boundary leaves behind", () => {
+    expect(
+      contextUsedFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "manual",
+          pre_tokens: 161_426,
+          post_tokens: 16_641,
+        },
+      }),
+    ).toBe(16_641);
+    expect(
+      contextUsedFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 161_426 },
+      }),
+    ).toBeUndefined();
+    expect(
+      contextUsedFromCompactBoundary({
+        type: "system",
+        subtype: "status",
+        compact_metadata: { post_tokens: 16_641 },
+      }),
+    ).toBeUndefined();
   });
 
   it("ignores system messages that are not status or compact", () => {
