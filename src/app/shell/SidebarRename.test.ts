@@ -1927,6 +1927,39 @@ describe("collapsed rail Inbox actions", () => {
     expect(props.onToggleProjectRail).toHaveBeenCalledOnce();
   });
 
+  it("keeps the Chat / Explore row beside the compact rail", async () => {
+    props.projectRailOpen = false;
+    props.onSelectProject = vi.fn();
+    props.onOpenProject = vi.fn();
+    props.workspaceView = "explore";
+    props.onSwitchWorkspaceView = vi.fn();
+    props.tab = "files";
+    await act(async () => render());
+
+    expect(
+      container.querySelector("[data-compact-project-rail]"),
+    ).not.toBeNull();
+    const row = container.querySelector<HTMLElement>(
+      'aside [role="tablist"][aria-label="Workspace"]',
+    )!;
+    expect(row).not.toBeNull();
+    const rowTabs = Array.from(
+      row.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    );
+    expect(rowTabs.map((tab) => tab.textContent)).toEqual([
+      "Explorer",
+      "Changes",
+    ]);
+    act(() => rowTabs[1].click());
+    expect(props.onTabChange).toHaveBeenCalledWith("changes");
+    act(() =>
+      row
+        .querySelector<HTMLButtonElement>('[role="radio"][aria-label^="Chat"]')!
+        .click(),
+    );
+    expect(props.onSwitchWorkspaceView).toHaveBeenCalledWith("chat");
+  });
+
   it("slides the collapsed sidebar open until dismissed from the compact tabs", async () => {
     // happy-dom animations never finish, so drive them by hand.
     const animations: { keyframes: Keyframe[]; animation: Animation }[] = [];
