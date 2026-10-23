@@ -3,8 +3,9 @@ import { contextRatio } from "../../sessions/model/contextUsage";
 
 /**
  * A Mono's chat never ends, but the provider session behind it does. Every
- * turn resends the whole native context, so once it fills most of the model's
- * context window, the next turn quietly starts a fresh provider session.
+ * turn resends the whole native context, so once it passes the user's token
+ * limit or fills most of the model's context window, the next turn quietly
+ * starts a fresh provider session.
  * That session gets the soul and memory (see `monoFiles`)
  * plus a brief of where the conversation was: recent exchanges word for word
  * and a line for each earlier one. Nothing is summarized by a model, so a
@@ -23,7 +24,7 @@ const VERBATIM_REPLY_CHARS = 3_000;
 const LINE_CHARS = 280;
 const EARLIER_CHARS = 3_000;
 
-export type RotationReason = "context";
+export type RotationReason = "context" | "manual";
 
 /** What the latest rotation started the provider session with. */
 export type MonoRotation = {
@@ -48,15 +49,28 @@ type Exchange = {
   peer?: string;
 };
 
-/** Whether the next turn should start a fresh provider session, and why. */
+/**
+ * Whether the next turn should start a fresh provider session, and why.
+ * `limit` caps the thread in tokens whatever the window; `0` leaves only the
+ * window share, which on a 1M window would carry 800K tokens on every turn.
+ */
 export function rotationReason(
-  session: Pick<Session, "providerSessionId" | "context" | "blocks">,
+  session: Pick<
+    Session,
+    "providerSessionId" | "context" | "blocks" | "monoFreshThread"
+  >,
+  limit = 0,
 ): RotationReason | undefined {
   // Nothing to rotate: the next turn already starts a new session.
   if (!session.providerSessionId) return undefined;
-  // With no reported window, leave compaction to the provider.
+  if (session.monoFreshThread) return "manual";
   const ratio = contextRatio(session.context);
-  return ratio !== null && ratio >= ROTATE_RATIO ? "context" : undefined;
+  if (ratio !== null && ratio >= ROTATE_RATIO) return "context";
+  // With neither a window nor a limit, leave compaction to the provider.
+  const used = session.context?.used;
+  return limit > 0 && used != null && Number.isFinite(used) && used >= limit
+    ? "context"
+    : undefined;
 }
 
 /** The user's turns and what the Mono finally said in each. */

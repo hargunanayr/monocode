@@ -26,15 +26,24 @@ function ringClass(ratio: number): string {
  * ring. A conversation with nothing in it yet is the exception: its context
  * is known to be empty, so `empty` shows a bare ring.
  */
+export type ContextMeterAction = {
+  label: string;
+  title: string;
+  disabled?: boolean;
+  run: () => void;
+};
+
 export function ContextMeter({
   usage,
-  onCompact,
-  compactDisabled = false,
+  action,
+  note,
   empty = false,
 }: {
   usage?: ContextUsage;
-  onCompact?: () => void;
-  compactDisabled?: boolean;
+  /** What clicking the ring offers, such as compacting the conversation. */
+  action?: ContextMeterAction;
+  /** A line under the reading, such as what the next turn will do. */
+  note?: string;
   /** The conversation has no messages yet. */
   empty?: boolean;
 }) {
@@ -51,7 +60,7 @@ export function ContextMeter({
   }
 
   const { headline, detail } = contextTooltip(usage);
-  const actionsOpen = open && onCompact != null;
+  const actionsOpen = open && action != null;
 
   return (
     <div
@@ -60,7 +69,7 @@ export function ContextMeter({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {onCompact ? (
+      {action ? (
         <button
           type="button"
           title="Context usage"
@@ -79,27 +88,32 @@ export function ContextMeter({
           anchor={root}
           side="top"
           align="end"
-          onDismiss={onCompact ? () => setOpen(false) : undefined}
+          onDismiss={action ? () => setOpen(false) : undefined}
           className={`w-max px-2.5 py-1.5 ${actionsOpen ? "" : "pointer-events-none"}`}
         >
           <div className="text-[12px] leading-4 text-content">{headline}</div>
           <div className="text-[11px] leading-4 text-content/50">{detail}</div>
+          {note ? (
+            <div className="mt-1 text-[11px] leading-4 text-content/70">
+              {note}
+            </div>
+          ) : null}
           {actionsOpen ? (
             <button
               type="button"
-              disabled={compactDisabled}
+              disabled={action.disabled}
               title={
-                compactDisabled
+                action.disabled
                   ? "Wait for the current operation to finish"
-                  : "Compact this conversation's context"
+                  : action.title
               }
               onClick={() => {
                 setOpen(false);
-                onCompact?.();
+                action.run();
               }}
               className="mt-1.5 w-full rounded-md bg-content/10 px-2 py-1 text-[11px] text-content hover:bg-content/15 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Compact now
+              {action.label}
             </button>
           ) : null}
         </Popover>

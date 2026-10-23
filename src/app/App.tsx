@@ -799,6 +799,7 @@ import {
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadMonosEnabled,
+  loadMonoContextLimit,
   subscribeMonosEnabled,
   loadDiffViewer,
   loadFollowUpBehavior,
@@ -7980,7 +7981,7 @@ function Workspace({
       // a fresh one, briefed on where the conversation was.
       const monoRotationReason =
         mono && !pendingSwitch && !editedResend
-          ? rotationReason(current)
+          ? rotationReason(current, loadMonoContextLimit())
           : undefined;
       const monoRotation = monoRotationReason
         ? planRotation(
@@ -8093,6 +8094,8 @@ function Workspace({
               ...selected,
               providerAccountId,
               usageLimit: undefined,
+              // Spent by this turn, whether it rotated or switched providers.
+              monoFreshThread: undefined,
               worktreePreparing: createDraftWorktree
                 ? true
                 : selected.worktreePreparing,
@@ -10944,6 +10947,18 @@ function Workspace({
     },
     [enqueueHarnessEvent, flushHarnessEvents],
   );
+
+  // A Mono frees context the way it does on its own: its next turn starts a
+  // fresh thread, briefed on the chat, with no summarizer call to wait on.
+  const onStartFreshMonoThread = useCallback((sessionId: string) => {
+    const next = sessionsRef.current.map((session) =>
+      session.id === sessionId && session.providerSessionId
+        ? { ...session, monoFreshThread: true }
+        : session,
+    );
+    sessionsRef.current = next;
+    setSessions(next);
+  }, []);
 
   const onStop = useCallback(
     (sessionId: string, managed = false) => {
@@ -13865,6 +13880,7 @@ function Workspace({
     onSubmit,
     onStop,
     onCompactContext,
+    onStartFreshMonoThread,
     onPlaceSessionInFolder,
     onDeleteQueuedMessage,
     onEditQueuedMessage,

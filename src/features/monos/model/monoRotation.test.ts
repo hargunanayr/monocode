@@ -51,6 +51,38 @@ it.each([128_000, 200_000, 1_000_000])(
   },
 );
 
+it("rotates at the token limit before the window share", () => {
+  const session = (used: number, window?: number) => ({
+    providerSessionId: "native",
+    context: { used, window },
+    blocks: [],
+  });
+  expect(rotationReason(session(199_999, 1_000_000), 200_000)).toBeUndefined();
+  expect(rotationReason(session(200_000, 1_000_000), 200_000)).toBe("context");
+  // The limit holds without a reported window too.
+  expect(rotationReason(session(200_000), 200_000)).toBe("context");
+  // A window share reached first still rotates.
+  expect(rotationReason(session(160_000, 200_000), 500_000)).toBe("context");
+  // No limit leaves the window share alone.
+  expect(rotationReason(session(600_000, 1_000_000), 0)).toBeUndefined();
+  expect(
+    rotationReason(session(Number.POSITIVE_INFINITY), 200_000),
+  ).toBeUndefined();
+});
+
+it("rotates on request whatever the level", () => {
+  const session = {
+    providerSessionId: "native",
+    context: { used: 10_000, window: 1_000_000 },
+    blocks: [],
+    monoFreshThread: true,
+  };
+  expect(rotationReason(session, 200_000)).toBe("manual");
+  expect(
+    rotationReason({ ...session, providerSessionId: undefined }, 200_000),
+  ).toBeUndefined();
+});
+
 it.each([45_000, 600_000])(
   "keeps a %i-token conversation in a large window across a long break",
   (used) => {

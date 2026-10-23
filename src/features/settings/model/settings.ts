@@ -206,6 +206,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "mono rail compact collapsed icons top divider project picker",
   },
   {
+    id: "mono-context-limit",
+    section: "monos",
+    label: "Context limit",
+    keywords: "mono context tokens window rotate fresh thread compact cost",
+  },
+  {
     id: "mono-list",
     section: "monos",
     label: "Your monos",
@@ -877,6 +883,51 @@ export function subscribeMonosEnabled(onStoreChange: () => void) {
   window.addEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(MONOS_ENABLED_CHANGE_EVENT, onStoreChange);
+}
+
+const MONO_CONTEXT_LIMIT_KEY = "monocode.monoContextLimit";
+
+/**
+ * Tokens a Mono's thread may hold before its next turn starts a fresh one.
+ * `0` leaves only the share of the model's window as the trigger.
+ */
+export const MONO_CONTEXT_LIMITS = [
+  100_000, 150_000, 200_000, 300_000, 500_000, 0,
+] as const;
+
+export const MONO_CONTEXT_LIMIT_DEFAULT = 200_000;
+
+/** Fired on `window` when the Mono context limit changes. */
+export const MONO_CONTEXT_LIMIT_CHANGE_EVENT =
+  "monocode:mono-context-limit-change";
+
+export function loadMonoContextLimit(): number {
+  try {
+    const raw = localStorage.getItem(MONO_CONTEXT_LIMIT_KEY);
+    const value = raw === null ? Number.NaN : Number(raw);
+    return (MONO_CONTEXT_LIMITS as readonly number[]).includes(value)
+      ? value
+      : MONO_CONTEXT_LIMIT_DEFAULT;
+  } catch {
+    return MONO_CONTEXT_LIMIT_DEFAULT;
+  }
+}
+
+export function saveMonoContextLimit(value: number) {
+  try {
+    localStorage.setItem(MONO_CONTEXT_LIMIT_KEY, String(value));
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(MONO_CONTEXT_LIMIT_CHANGE_EVENT));
+}
+
+export function subscribeMonoContextLimit(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MONO_CONTEXT_LIMIT_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(MONO_CONTEXT_LIMIT_CHANGE_EVENT, onStoreChange);
 }
 
 const MONO_MENU_BAR_KEY = "monocode.monoMenuBarIcon";

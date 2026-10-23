@@ -228,6 +228,7 @@ import {
   sessionDisplayTitle,
   type HarnessId,
 } from "../../sessions/model/session";
+import { formatTokens } from "../../sessions/model/contextUsage";
 import {
   loadProjectProviderSettings,
   projectProvidersRevision,
@@ -353,6 +354,7 @@ import {
   loadModelControls,
   loadNotesEnabled,
   loadMonosEnabled,
+  loadMonoContextLimit,
   loadMonoMenuBarIcon,
   loadKeybindingOverrides,
   saveMonoMenuBarIcon,
@@ -377,6 +379,10 @@ import {
   saveNotesEnabled,
   saveMonosEnabled,
   subscribeMonosEnabled,
+  saveMonoContextLimit,
+  subscribeMonoContextLimit,
+  MONO_CONTEXT_LIMITS,
+  MONO_CONTEXT_LIMIT_DEFAULT,
   saveKeybindingOverride,
   validateKeybindingShortcut,
   saveQuickComposerEnabled,
@@ -4248,6 +4254,11 @@ function MonosPage() {
     loadMonoMenuBarIcon,
     () => true,
   );
+  const contextLimit = useSyncExternalStore(
+    subscribeMonoContextLimit,
+    loadMonoContextLimit,
+    () => MONO_CONTEXT_LIMIT_DEFAULT,
+  );
   const railPinned = useRailMonosPinned();
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
@@ -4287,6 +4298,21 @@ function MonosPage() {
             />
           </Row>
         )}
+        <Row
+          id="mono-context-limit"
+          label="Context limit"
+          description="Every turn resends a Mono's whole thread. Once it holds this many tokens, or 80% of the model's context window if that comes first, the next turn starts a fresh thread briefed on the chat so far. Lower costs less per turn; higher keeps more detail in view."
+        >
+          <Segmented
+            label="Context limit"
+            value={String(contextLimit)}
+            options={MONO_CONTEXT_LIMITS.map((limit) => ({
+              value: String(limit),
+              label: limit === 0 ? "None" : formatTokens(limit),
+            }))}
+            onChange={(value) => saveMonoContextLimit(Number(value))}
+          />
+        </Row>
       </Group>
       <Group
         id="mono-list"
