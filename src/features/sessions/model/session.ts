@@ -506,6 +506,8 @@ export type Session = {
   providerAccountId?: string;
   /** Context-window level reported by the harness. Absent until it reports. */
   context?: ContextUsage;
+  /** Mono-only: the user asked for its next turn to start a fresh thread. In-memory only. */
+  monoFreshThread?: boolean;
   /**
    * Composer switched providers, but the previous child is still live.
    * Handoff runs on the next send, not on picker change.

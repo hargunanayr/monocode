@@ -190,6 +190,8 @@ export type SessionPaneProps = {
   onRemoveDraft: (sessionId: string, draftBlockId: string) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  /** A Mono's next turn starts a fresh thread instead of compacting. */
+  onStartFreshMonoThread?: (sessionId: string) => void;
   onPlaceSessionInFolder: (
     sessionId: string,
     target: SessionFolderTarget,
@@ -334,6 +336,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSubmit,
   onStop,
   onCompactContext,
+  onStartFreshMonoThread,
   onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
@@ -1258,12 +1261,30 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           }
                         />
                         {/* A Mono is one long conversation; this is how full
-                            its current thread is. It rotates threads itself,
-                            so there is nothing to compact here. */}
+                            its current thread is. It rotates threads rather
+                            than compacting, and can be asked to early. */}
                         <div className="grid size-6.5 place-items-center rounded-md transition-colors hover:bg-content/8">
                           <ContextMeter
                             usage={session.context}
                             empty={isEmpty}
+                            note={
+                              session.monoFreshThread
+                                ? "Your next message starts a fresh thread"
+                                : undefined
+                            }
+                            action={
+                              onStartFreshMonoThread &&
+                              session.providerSessionId &&
+                              !session.monoFreshThread
+                                ? {
+                                    label: "Start fresh thread",
+                                    title:
+                                      "Start your next message in a fresh thread, briefed on this chat",
+                                    run: () =>
+                                      onStartFreshMonoThread(session.id),
+                                  }
+                                : undefined
+                            }
                           />
                         </div>
                       </>
