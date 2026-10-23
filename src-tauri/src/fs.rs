@@ -635,9 +635,15 @@ pub struct ProjectFile {
 
 /// Workspace files for Quick Open. Prefer `git ls-files` (gitignore-aware,
 /// index-backed); otherwise a bounded walk that never descends into vendor dirs.
+/// `include_ignored` adds the files Git ignores one by one, such as `.env`, for
+/// when the explorer shows excluded files; wholly ignored folders stay out.
 #[tauri::command]
-pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    crate::background_work::read(move || list_project_files_sync(&cwd))
+pub async fn list_project_files(
+    cwd: String,
+    include_ignored: Option<bool>,
+) -> Result<Vec<ProjectFile>, String> {
+    let include_ignored = include_ignored.unwrap_or(false);
+    crate::background_work::read(move || list_project_files_with(&cwd, None, include_ignored))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -656,6 +662,14 @@ pub(crate) fn list_project_files_sync_cancellable(
     cwd: &str,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<ProjectFile>, String> {
+    list_project_files_with(cwd, cancel, false)
+}
+
+fn list_project_files_with(
+    cwd: &str,
+    cancel: Option<&AtomicBool>,
+    include_ignored: bool,
+) -> Result<Vec<ProjectFile>, String> {
     let root = expand_home(cwd);
     if !root.is_dir() {
         return Err(format!("{}: Not a directory", root.display()));
@@ -666,7 +680,7 @@ pub(crate) fn list_project_files_sync_cancellable(
     if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
         return Ok(Vec::new());
     }
-    if let Some(files) = git_ls_files(&root, cancel) {
+    if let Some(files) = git_ls_files(&root, cancel, include_ignored) {
         return Ok(files);
     }
     // `git_ls_files` returns `None` for "not a git repo", truncation, and
@@ -675,7 +689,7 @@ pub(crate) fn list_project_files_sync_cancellable(
     if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
         return Ok(Vec::new());
     }
-    Ok(walk_project_files(&root, cancel.into()))
+    Ok(walk_project_files(&root, cancel.into(), include_ignored))
 }
 
 const CHECK_IGNORE_SOME_MATCHED: i32 = 0;
@@ -730,7 +744,11 @@ fn git_ignored_names(dir: &Path, names: &[&str]) -> Option<HashSet<String>> {
 /// bounded by `MAX_PROJECT_FILES` and cancellable.
 const MAX_LS_FILES_BYTES: usize = 8 * 1024 * 1024;
 
-fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectFile>> {
+fn git_ls_files(
+    root: &Path,
+    cancel: Option<&AtomicBool>,
+    include_ignored: bool,
+) -> Option<Vec<ProjectFile>> {
     // Routed through the bounded reader rather than `Command::output()`: this
     // is the path a cancelled search actually takes, because a repository with
     // a git index never reaches the walk. `output()` buffers the whole listing
@@ -750,9 +768,41 @@ fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectF
     }
 
     let mut files = Vec::new();
+    if !push_ls_files(root, &raw, &mut files, cancel) {
+        return Some(Vec::new());
+    }
+    if include_ignored && files.len() < MAX_PROJECT_FILES {
+        // `--directory` folds a wholly ignored folder into one `name/` entry,
+        // which `push_ls_files` drops, so dependencies and build output stay
+        // out while loose ignored files like `.env` come in after the rest.
+        // Without this listing the tracked and untracked files still stand.
+        if let Some((raw, false)) = git_output_capped(
+            root,
+            &["ls-files", "-oi", "--exclude-standard", "--directory", "-z"],
+            MAX_LS_FILES_BYTES,
+            cancel,
+        ) {
+            if !push_ls_files(root, &raw, &mut files, cancel) {
+                return Some(Vec::new());
+            }
+        }
+    }
+    Some(files)
+}
+
+/// Appends a NUL-separated `git ls-files` listing; false once `cancel` is set.
+fn push_ls_files(
+    root: &Path,
+    raw: &[u8],
+    files: &mut Vec<ProjectFile>,
+    cancel: Option<&AtomicBool>,
+) -> bool {
     for rel in raw.split(|b| *b == 0) {
         if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
-            return Some(Vec::new());
+            return false;
+        }
+        if files.len() >= MAX_PROJECT_FILES {
+            break;
         }
         if rel.is_empty() {
             continue;
@@ -773,11 +823,8 @@ fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectF
             path: path_to_js(&path),
             relative,
         });
-        if files.len() >= MAX_PROJECT_FILES {
-            break;
-        }
     }
-    Some(files)
+    true
 }
 
 #[derive(Debug, Clone, Default)]
@@ -5135,7 +5182,11 @@ impl<'a> From<Option<&'a AtomicBool>> for WalkStop<'a> {
     }
 }
 
-fn walk_project_files(root: &Path, stop: WalkStop<'_>) -> Vec<ProjectFile> {
+fn walk_project_files(
+    root: &Path,
+    stop: WalkStop<'_>,
+    include_ignored: bool,
+) -> Vec<ProjectFile> {
     let ignore = Ignore::load(root);
     let mut files = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
@@ -5177,7 +5228,7 @@ fn walk_project_files(root: &Path, stop: WalkStop<'_>) -> Vec<ProjectFile> {
                 dirs.push(path);
                 continue;
             }
-            if ignore.matches(name) {
+            if !include_ignored && ignore.matches(name) {
                 continue;
             }
             let Ok(relative) = path.strip_prefix(root) else {
@@ -6961,7 +7012,7 @@ mod tests {
         std::fs::write(dir.0.join(".gitignore"), "secret.txt\n").unwrap();
         std::fs::write(dir.0.join("secret.txt"), "nope\n").unwrap();
 
-        let files = walk_project_files(&dir.0, WalkStop::Never);
+        let files = walk_project_files(&dir.0, WalkStop::Never, false);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(paths.contains(&"src/main.ts"));
@@ -6977,14 +7028,14 @@ mod tests {
             std::fs::create_dir_all(dir.0.join(format!("dir{index}"))).unwrap();
             std::fs::write(dir.0.join(format!("dir{index}")).join("app.ts"), "x\n").unwrap();
         }
-        let uncancelled = walk_project_files(&dir.0, WalkStop::Never);
+        let uncancelled = walk_project_files(&dir.0, WalkStop::Never, false);
         assert_eq!(uncancelled.len(), 64);
 
         let cancel = AtomicBool::new(true);
-        assert!(walk_project_files(&dir.0, WalkStop::Flag(&cancel)).is_empty());
+        assert!(walk_project_files(&dir.0, WalkStop::Flag(&cancel), false).is_empty());
         // The same walk when nothing is cancelled must still see every file.
         let live = AtomicBool::new(false);
-        assert_eq!(walk_project_files(&dir.0, WalkStop::Flag(&live)).len(), 64);
+        assert_eq!(walk_project_files(&dir.0, WalkStop::Flag(&live), false).len(), 64);
     }
 
     #[test]
@@ -6996,14 +7047,14 @@ mod tests {
         for index in 0..64 {
             std::fs::write(dir.0.join(format!("file{index}.ts")), "x\n").unwrap();
         }
-        let all = walk_project_files(&dir.0, WalkStop::Never);
+        let all = walk_project_files(&dir.0, WalkStop::Never, false);
         assert_eq!(all.len(), 64);
 
         // Stopping partway through the first directory's entries is the only
         // outcome that distinguishes the per-entry check from the up-front one:
         // no up-front check yields all 64, a check that fires on the first
         // directory yields 0.
-        let midway = walk_project_files(&dir.0, WalkStop::AfterEntries(5));
+        let midway = walk_project_files(&dir.0, WalkStop::AfterEntries(5), false);
         assert!(
             !midway.is_empty() && midway.len() < all.len(),
             "expected a partial listing, got {} of {}",
@@ -7020,7 +7071,7 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("Info.plist"), "x\n").unwrap();
 
-        let files = walk_project_files(&dir.0, WalkStop::Never);
+        let files = walk_project_files(&dir.0, WalkStop::Never, false);
         let paths = relative_paths(&files);
         assert!(paths.contains(&"app.ts"));
         assert!(!paths.iter().any(|r| r.contains("Some.app")));
@@ -7212,6 +7263,27 @@ mod tests {
     }
 
     #[test]
+    fn git_ls_files_can_add_loose_ignored_files() {
+        let dir = tmp("index-git-ignored");
+        if !init_git_commit(&dir.0, &[("tracked.ts", "x\n")]) {
+            return;
+        }
+        std::fs::write(dir.0.join(".gitignore"), ".env\nlogs/\n").unwrap();
+        std::fs::write(dir.0.join(".env"), "x\n").unwrap();
+        std::fs::create_dir_all(dir.0.join("logs")).unwrap();
+        std::fs::write(dir.0.join("logs").join("app.log"), "x\n").unwrap();
+
+        let files = git_ls_files(&dir.0, None, false).unwrap();
+        assert!(!relative_paths(&files).contains(&".env"));
+
+        let files = git_ls_files(&dir.0, None, true).unwrap();
+        let paths = relative_paths(&files);
+        assert!(paths.contains(&"tracked.ts"));
+        assert!(paths.contains(&".env"));
+        assert!(!paths.iter().any(|r| r.starts_with("logs")));
+    }
+
+    #[test]
     fn a_cancelled_git_listing_does_not_return_the_index() {
         let dir = tmp("index-git-cancel");
         if !init_git_commit(&dir.0, &[("tracked.ts", "x\n")]) {
@@ -7219,19 +7291,19 @@ mod tests {
         }
         let cancel = AtomicBool::new(true);
         assert!(
-            git_ls_files(&dir.0, Some(&cancel)).is_none(),
+            git_ls_files(&dir.0, Some(&cancel), false).is_none(),
             "cancelled ls-files must not look like a missing git index"
         );
         // The walk still sees the file, so falling through after a cancelled
         // `git_ls_files` would reintroduce the listing the cancel was meant
         // to drop.
-        assert!(walk_project_files(&dir.0, WalkStop::Never)
+        assert!(walk_project_files(&dir.0, WalkStop::Never, false)
             .iter()
             .any(|file| file.relative == "tracked.ts"));
         let files =
             list_project_files_sync_cancellable(&dir.0.to_string_lossy(), Some(&cancel)).unwrap();
         assert!(files.is_empty());
-        assert!(git_ls_files(&dir.0, None)
+        assert!(git_ls_files(&dir.0, None, false)
             .unwrap()
             .iter()
             .any(|file| file.relative == "tracked.ts"));
