@@ -22,6 +22,8 @@ type Props = {
   agents: LiveAgent[];
   activeSessionId?: string;
   onSelect?: (sessionId: string) => void;
+  /** Drops the finished agents from the list, as if each had been opened. */
+  onClearFinished?: () => void;
   bottomSpacing?: boolean;
   groupLabels?: Record<string, string>;
   groupColors?: Record<string, number>;
@@ -33,6 +35,7 @@ export function LiveAgentsPreview({
   agents,
   activeSessionId,
   onSelect,
+  onClearFinished,
   bottomSpacing = false,
   groupLabels: groupLabelsProp,
   groupColors: groupColorsProp,
@@ -62,6 +65,7 @@ export function LiveAgentsPreview({
 
   if (!shown) return null;
 
+  const finished = agents.filter((agent) => agent.done).length;
   const extra = agents.length - LIVE_AGENT_CAP;
   const visible =
     expanded || extra <= 0 ? agents : agents.slice(0, LIVE_AGENT_CAP);
@@ -84,6 +88,20 @@ export function LiveAgentsPreview({
           <span className="min-w-0 flex-1 truncate text-xs text-content/50">
             Working
           </span>
+          {onClearFinished && finished > 0 ? (
+            <button
+              type="button"
+              onClick={onClearFinished}
+              title={
+                finished === agents.length
+                  ? "Clear all"
+                  : `Clear ${finished} finished`
+              }
+              className="-my-0.5 rounded px-1.5 py-0.5 text-[11px] text-content/40 hover:bg-content/8 hover:text-content"
+            >
+              Clear
+            </button>
+          ) : null}
           <span className="text-[11px] tabular-nums text-content/40">
             {agents.length}
           </span>

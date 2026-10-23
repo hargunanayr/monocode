@@ -370,6 +370,8 @@ type Props = {
   busyProjectPaths?: Iterable<string>;
   liveAgents?: LiveAgent[];
   onSelectAgent?: (sessionId: string) => void;
+  /** Drops the finished agents from the Working list without opening them. */
+  onClearFinishedAgents?: () => void;
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
@@ -485,6 +487,7 @@ function SidebarComponent({
   busyProjectPaths,
   liveAgents = [],
   onSelectAgent,
+  onClearFinishedAgents,
   onSelectProject,
   onOpenProject,
   onRemoveProject,
@@ -3110,6 +3113,7 @@ function SidebarComponent({
               agents={liveAgents}
               activeSessionId={activeSessionId}
               onSelect={onSelectAgent}
+              onClearFinished={onClearFinishedAgents}
               bottomSpacing={compactRailVisible}
             />
             <SidebarUpdateFooter
@@ -3280,6 +3284,7 @@ function SidebarComponent({
           liveAgents={liveAgents}
           activeSessionId={activeSessionId}
           onSelectAgent={onSelectAgent}
+          onClearFinishedAgents={onClearFinishedAgents}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
           onGoBack={onGoBack}

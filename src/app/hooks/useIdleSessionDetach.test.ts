@@ -157,7 +157,7 @@ function mountWorkspace(initial: Partial<WorkspaceState> = {}) {
     const [sessions, setSessions] = useState(state.sessions);
     sessionsRef.current = sessions;
     tabsRef.current = state.tabs;
-    const unseenFinishedIds = useUnseenFinishedSessions(
+    const [unseenFinishedIds] = useUnseenFinishedSessions(
       sessions,
       state.busySessionIds,
       state.activeSessionId,
