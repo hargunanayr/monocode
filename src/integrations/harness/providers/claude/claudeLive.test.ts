@@ -2034,14 +2034,28 @@ describe("claude manual compaction", () => {
       type: "system",
       subtype: "compact_boundary",
       session_id: "sess_1",
+      compact_metadata: {
+        trigger: "manual",
+        pre_tokens: 161_426,
+        post_tokens: 16_641,
+      },
     });
-    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      usage: { input_tokens: 150_000, output_tokens: 9_000 },
+    });
     await compact;
 
     expect(events).toContainEqual({
       type: "status",
       text: "Compacted context",
     });
+    // The level drops at the boundary; the summarizer's usage is not it.
+    expect(events.filter((event) => event.type === "context")).toEqual([
+      { type: "context", used: 16_641 },
+    ]);
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 });

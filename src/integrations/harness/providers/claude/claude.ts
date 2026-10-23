@@ -24,6 +24,7 @@ import {
   assistantToolUses,
   contextFromResult,
   contextUsedFromAssistant,
+  contextUsedFromCompactBoundary,
   turnMetricsFromResult,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -731,6 +732,10 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
+    // The /compact result skips its reading (see handleResult), so without
+    // this the meter would keep showing the pre-compaction level.
+    const compacted = contextUsedFromCompactBoundary(rec);
+    if (compacted != null) live.onEvent({ type: "context", used: compacted });
     const text = statusTextFromSystem(rec);
     if (text) {
       if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {
@@ -976,7 +981,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     return;
   }
   // A /compact result reports the summarizer call's usage, not the rebuilt
-  // conversation level. The next real turn will provide the fresh reading.
+  // conversation level. The compact boundary carries that level instead.
   if (!live.manualCompaction) {
     const context = contextFromResult(rec);
     if (context) live.onEvent({ type: "context", ...context });
