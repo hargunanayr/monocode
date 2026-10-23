@@ -169,8 +169,12 @@ export function listSkills(
   });
 }
 
-export function listProjectFiles(cwd: string): Promise<ProjectFile[]> {
-  return invoke<ProjectFile[]>("list_project_files", { cwd });
+/** With `includeIgnored`, also files Git ignores one by one, such as `.env`. */
+export function listProjectFiles(
+  cwd: string,
+  includeIgnored = false,
+): Promise<ProjectFile[]> {
+  return invoke<ProjectFile[]>("list_project_files", { cwd, includeIgnored });
 }
 
 export type GitDiffStats = {

@@ -4,6 +4,10 @@ import { scorePath, type FuzzyHit } from "../../../shared/lib/fuzzy";
 import { resolveWorkspacePath, slash } from "../../../shared/lib/paths";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
+  loadShowExcludedFiles,
+  subscribeShowExcludedFiles,
+} from "../../settings/model/appearance";
+import {
   normalizeEditorPath,
   type FileOpenOptions,
 } from "../../search/model/search";
@@ -132,7 +136,7 @@ export function loadProjectFiles(
   const pending = inflight.get(cwd);
   if (!refresh && pending) return pending;
 
-  const promise = listProjectFiles(cwd)
+  const promise = listProjectFiles(cwd, loadShowExcludedFiles())
     .then((scanned) => {
       // A refresh or invalidation supersedes only this checkout's scan.
       if (inflight.get(cwd) !== promise) return scanned;
@@ -318,6 +322,13 @@ function pickOpenableFile(
 }
 
 subscribeDirsChanged(scheduleIndexRefresh);
+// Quick Open lists what the explorer shows, so its excluded files come and go
+// with the explorer's.
+subscribeShowExcludedFiles(() => {
+  const cwd = lastCwd;
+  invalidateProjectFiles();
+  if (cwd) void loadProjectFiles(cwd).catch(() => undefined);
+});
 
 if (typeof document !== "undefined") {
   const resume = () => {
