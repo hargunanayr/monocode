@@ -61,6 +61,8 @@ export type MonoSpawnedSession = {
   title: string;
   harness: HarnessId;
   model: string;
+  /** As launched; an open session's own settings are newer. */
+  modelSettings?: Record<string, string>;
 };
 
 export type TaskListItemStatus =

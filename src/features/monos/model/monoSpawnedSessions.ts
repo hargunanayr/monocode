@@ -28,6 +28,7 @@ export function sanitizeMonoSpawnedSessions(
       !item.model.trim()
     )
       continue;
+    const modelSettings = sanitizeModelSettings(item.modelSettings);
     if (!result.has(item.sessionId))
       result.set(item.sessionId, {
         sessionId: item.sessionId,
@@ -35,9 +36,24 @@ export function sanitizeMonoSpawnedSessions(
         title: item.title.trim().slice(0, 300) || "Agent session",
         harness: item.harness,
         model: item.model,
+        ...(modelSettings ? { modelSettings } : {}),
       });
   }
   return [...result.values()];
+}
+
+function sanitizeModelSettings(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] =>
+      typeof entry[1] === "string" && entry[0].length <= 64 && entry[1].length <= 128,
+  );
+  return entries.length && entries.length <= 20
+    ? Object.fromEntries(entries)
+    : undefined;
 }
 
 /** Record accepted launches and follow-ups; retries never duplicate a card. */

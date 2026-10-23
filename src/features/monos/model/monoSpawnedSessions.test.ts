@@ -223,6 +223,18 @@ it("sanitizes saved references and strips extra fields", () => {
   expect(sanitizeMonoSpawnedSessions({})).toEqual([]);
 });
 
+it("keeps the settings a session launched with, dropping malformed ones", () => {
+  expect(
+    sanitizeMonoSpawnedSessions([
+      { ...launch, modelSettings: { effort: "high", fast: 1 } },
+      { ...launch, sessionId: "list", modelSettings: ["high"] },
+    ]),
+  ).toEqual([
+    { ...launch, modelSettings: { effort: "high" } },
+    { ...launch, sessionId: "list" },
+  ]);
+});
+
 it("reads a launched session's state for its card", () => {
   const session = newSession("codex", "/repo");
   const ran = (blocks: Block[], extra = {}) =>

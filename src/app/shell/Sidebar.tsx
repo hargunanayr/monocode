@@ -4842,6 +4842,7 @@ export const SessionCard = memo(function SessionCard({
   startedOpen = false,
   startedInView = false,
   modelInFooter = false,
+  effort,
   statusLabel,
   project,
   now,
@@ -4881,6 +4882,8 @@ export const SessionCard = memo(function SessionCard({
   /** Shows the model as its provider's mark beside the branch, so the title
    * shares its row with the time and the card is a line shorter. */
   modelInFooter?: boolean;
+  /** Its reasoning level, named after the model in the footer. */
+  effort?: string;
   /** Stands in for the time, for a session with no state of its own to show. */
   statusLabel?: string;
   /** Names its project before the branch, where sessions span several. */
@@ -5515,15 +5518,18 @@ export const SessionCard = memo(function SessionCard({
                 <span className="min-w-0 flex-1" />
               )}
               <span className="relative flex shrink-0 items-center gap-px">
-                {/* Just the provider's mark; the model's name slides out beside
-                it while the card is hovered or focused. */}
+                {/* The model and its effort beside the provider's mark, so
+                what each session runs on reads at a glance. */}
                 {modelInFooter && model ? (
                   <span
-                    title={model}
+                    title={effort ? `${model} · ${effort}` : model}
                     className="flex min-w-0 items-center text-[11px] text-content/50"
                   >
-                    <span className="max-w-0 truncate pr-0 opacity-0 transition-[max-width,opacity,padding] duration-200 ease-out group-focus-within:max-w-32 group-focus-within:pr-1.5 group-focus-within:opacity-100 group-hover:max-w-32 group-hover:pr-1.5 group-hover:opacity-100 motion-reduce:transition-none">
+                    <span className="max-w-44 truncate pr-1.5">
                       {model}
+                      {effort ? (
+                        <span className="text-content/35"> · {effort}</span>
+                      ) : null}
                     </span>
                     <HarnessIcon
                       harness={session.harness}
