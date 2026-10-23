@@ -140,6 +140,36 @@ describe("LiveAgentsPreview", () => {
     expect(cards()).toHaveLength(1);
   });
 
+  it("offers to clear once an agent has finished", () => {
+    const onClearFinished = vi.fn();
+    const props = {
+      onClearFinished,
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    };
+    const clear = () =>
+      Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Clear",
+      );
+
+    render({ ...props, agents: [agent("a", "/repo/a")] });
+    expect(clear()).toBeUndefined();
+
+    render({
+      ...props,
+      agents: [agent("a", "/repo/a"), agent("b", "/repo/b", { done: true })],
+    });
+    expect(clear()!.title).toBe("Clear 1 finished");
+    act(() => clear()!.click());
+    expect(onClearFinished).toHaveBeenCalledOnce();
+    expect(container.querySelector('[data-live-agent-card="b"]')).not.toBeNull();
+
+    render({ ...props, agents: [agent("b", "/repo/b", { done: true })] });
+    expect(clear()!.title).toBe("Clear all");
+  });
+
   it("keeps elapsed timers out of its live region", () => {
     render({
       agents: [agent("a", "/repo/a"), agent("b", "/repo/b")],

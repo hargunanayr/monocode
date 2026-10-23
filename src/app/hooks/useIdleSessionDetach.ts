@@ -140,6 +140,7 @@ export function useIdleSessionDetach({
     sessions,
     tabs,
     liveAgentsEnabled,
+    unseenFinishedIds,
     orchestrationRuns,
     detachIdleSessions,
   ]);

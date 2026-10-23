@@ -2442,7 +2442,7 @@ function Workspace({
   useEffect(() => {
     if (loadNotificationsEnabled()) void probeNotificationPermission();
   }, []);
-  const unseenFinishedIds = useUnseenFinishedSessions(
+  const [unseenFinishedIds, markFinishedSeen] = useUnseenFinishedSessions(
     sessions,
     busySessionIds,
     activeSessionId,
@@ -12268,6 +12268,13 @@ function Workspace({
     },
     [onOpenApprovalSession],
   );
+  const onClearFinishedAgents = useCallback(
+    () =>
+      markFinishedSeen(
+        liveAgents.filter((agent) => agent.done).map((agent) => agent.id),
+      ),
+    [liveAgents, markFinishedSeen],
+  );
 
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
@@ -14482,6 +14489,7 @@ function Workspace({
       busyProjectPaths={busyProjectPaths}
       liveAgents={liveAgents}
       onSelectAgent={onSelectLiveAgent}
+      onClearFinishedAgents={onClearFinishedAgents}
       onSelectProject={onSelectProject}
       onOpenProject={pickProject}
       onRemoveProject={onRemoveProject}
