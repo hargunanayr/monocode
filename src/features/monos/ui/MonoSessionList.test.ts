@@ -1,7 +1,14 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   getSession,
   listSessionsByProject,
@@ -12,6 +19,11 @@ import {
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
+import {
+  resetHarnessModelOverlays,
+  setHarnessModels,
+} from "../../sessions/model/models";
+import { CLAUDE_MODEL_CATALOG } from "../../../integrations/harness/providers/claude/claudeCatalog";
 import { MonoSessionList } from "./MonoSessionList";
 
 vi.mock("../../sessions/data/sessionStore", () => ({
@@ -99,6 +111,52 @@ it("shows live cards, updates their status and opens the selected session", asyn
     container.querySelector<HTMLElement>("[data-session-card]")!.click(),
   );
   expect(onOpenSession).toHaveBeenCalledWith(launch.sessionId);
+});
+
+it("names each card's model and effort, preferring an open session's own", async () => {
+  const opus: MonoSpawnedSession = {
+    ...launch,
+    harness: "claude",
+    model: "claude:opus-5-5",
+    modelSettings: { effort: "high" },
+  };
+  // Effort options come with the live catalog.
+  setHarnessModels("claude", CLAUDE_MODEL_CATALOG);
+  onTestFinished(resetHarnessModelOverlays);
+  const saved = (model: string) =>
+    vi.mocked(listSessionsByProject).mockResolvedValue([
+      {
+        id: opus.sessionId,
+        cwd: "/repo",
+        harness: "claude",
+        model,
+        runtimeMode: "default",
+        title: "Saved review",
+        createdAt: 1,
+        updatedAt: 2,
+      } as SessionSummary,
+    ]);
+  const footer = () =>
+    container.querySelector("[data-session-card]")?.textContent ?? "";
+  // Closed: the effort it launched with.
+  saved("claude:opus-5-5");
+  await render([], [opus]);
+  expect(footer()).toContain("Opus 5.5 · High");
+  // Open, at the effort it was changed to since.
+  const child = {
+    ...newSession("claude", "/repo", "claude:opus-5-5"),
+    id: opus.sessionId,
+    modelSettings: { effort: "xhigh" },
+  };
+  await render([child], [opus]);
+  expect(footer()).toContain("Opus 5.5 · Extra High");
+  // Closed on another model: the launch's effort no longer applies.
+  act(() => root.unmount());
+  root = createRoot(container);
+  saved("claude:sonnet-5");
+  await render([], [{ ...opus }]);
+  expect(footer()).toContain("Sonnet 5");
+  expect(footer()).not.toContain(" · ");
 });
 
 it("loads closed sessions across projects", async () => {

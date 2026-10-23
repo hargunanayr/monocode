@@ -31,6 +31,7 @@ import {
   type MonoSpawnedSession,
   type Session,
 } from "../../sessions/model/session";
+import { modelEffortLabel, resolveModel } from "../../sessions/model/models";
 import { SessionCard } from "../../../app/shell/Sidebar";
 import type { MonoLook } from "../model/mono";
 import { EmptyState, PageHeader } from "./monoPanelParts";
@@ -49,6 +50,26 @@ export type ShownMonoSession = {
  * than reload from blank.
  */
 const storedSessions = new Map<string, SessionSummary>();
+
+/**
+ * The effort a launched session runs at: its own settings while it is open,
+ * else what it launched with, unless its model has changed since.
+ */
+function launchedEffort(
+  launch: MonoSpawnedSession,
+  harness: SessionSummary["harness"],
+  model: string,
+  live?: Session,
+): string | undefined {
+  const settings =
+    live?.modelSettings ??
+    (launch.harness === harness && launch.model === model
+      ? launch.modelSettings
+      : undefined);
+  return settings
+    ? modelEffortLabel(resolveModel(harness, model), settings)
+    : undefined;
+}
 
 /** Cards for launched sessions, with where each stands, open or saved. */
 export function MonoSessionList({
@@ -301,6 +322,12 @@ export function MonoSessionList({
                 <SessionCard
                   session={summary}
                   modelInFooter
+                  effort={launchedEffort(
+                    launch,
+                    summary.harness,
+                    summary.model,
+                    live,
+                  )}
                   isActive={false}
                   isSelected={false}
                   busy={!!live?.busy}
@@ -354,6 +381,7 @@ export function MonoSessionList({
                   updatedAt: 0,
                 }}
                 modelInFooter
+                effort={launchedEffort(launch, launch.harness, launch.model)}
                 statusLabel={
                   unavailable
                     ? "Unavailable"

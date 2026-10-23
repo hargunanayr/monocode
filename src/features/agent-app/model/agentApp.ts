@@ -1252,6 +1252,9 @@ export async function handleAgentApp(
         cwd: launch.cwd,
         harness: launch.harness,
         model: launch.model,
+        ...(launch.modelSettings
+          ? { modelSettings: launch.modelSettings }
+          : {}),
         submitted: !launch.draft,
         draft: !!launch.draft,
         ...(notifyMonoId ? { notifyOnComplete: true } : {}),

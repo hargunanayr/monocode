@@ -11669,6 +11669,12 @@ function Workspace({
                   model:
                     created?.model ??
                     resolveModel(launch.harness, launch.model).id,
+                  ...((created?.modelSettings ?? launch.modelSettings)
+                    ? {
+                        modelSettings:
+                          created?.modelSettings ?? launch.modelSettings,
+                      }
+                    : {}),
                 });
               };
               const open = sessionsRef.current.find(
