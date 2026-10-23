@@ -2642,7 +2642,9 @@ function SidebarComponent({
               inboxUnseen={inboxUnseen}
             />
           ) : null}
-          {!compactRailVisible ? (
+          {/* The compact rail carries the tabs but not the Chat / Explore
+              switch, so a layout with modes keeps its row beside it. */}
+          {!compactRailVisible || modeSwitch ? (
             <div
               role="tablist"
               aria-label="Workspace"
