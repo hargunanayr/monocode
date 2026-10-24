@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatLiveElapsed,
   liveAgentsFromSessions,
+  type LiveMono,
 } from "./liveAgents";
 import { newSession, type Block, type Session } from "./session";
 
@@ -27,28 +28,151 @@ function edit(id: string, path = "src/App.tsx", status = "in_progress"): Block {
   };
 }
 
+const MONO: LiveMono = {
+  id: "crab",
+  sessionId: "mono-chat",
+  name: "MonoCrab",
+  mascot: "crab",
+  color: "hsl(160 60% 50%)",
+};
+
+/** The Mono's chat, having started each of `launched` this turn. */
+function monoChat(launched: Session[], patch: Partial<Session> = {}): Session {
+  return chat("~/.monocode/monos/crab", {
+    id: MONO.sessionId,
+    ...patch,
+    blocks: [
+      {
+        id: "mono-u1",
+        role: "user",
+        text: "fix the build",
+        startedAt: 500,
+        monoSpawnedSessions: launched.map((session) => ({
+          sessionId: session.id,
+          cwd: session.cwd,
+          title: session.title,
+          harness: session.harness,
+          model: session.model,
+        })),
+      },
+      ...(patch.blocks ?? []),
+    ],
+  });
+}
+
+/** A session whose latest turn the Mono sent, not the user. */
+function launched(id: string, cwd: string, patch: Partial<Session> = {}) {
+  return chat(cwd, {
+    id,
+    blocks: [
+      { id: "u1", role: "user", text: "go", startedAt: 1_000, appRequestId: id },
+    ],
+    ...patch,
+  });
+}
+
 describe("liveAgentsFromSessions", () => {
-  it("excludes Mono activity while keeping regular working and finished sessions", () => {
-    const working = chat("/repo", { id: "working", busy: true });
-    const done = chat("/repo", { id: "done" });
-    const monoWorking = chat("~", { id: "mono-working", busy: true });
-    const monoWaiting = chat("~", {
-      id: "mono-waiting",
-      blocks: [{
-        id: "approval",
-        role: "approval",
-        text: "Run a command",
-        approval: { requestId: 1 },
-      }],
+  it("shows a working Mono's chat as the Mono", () => {
+    const mono = monoChat([], { busy: true });
+    const [row] = liveAgentsFromSessions([mono], new Set(), [MONO]);
+    expect(row).toMatchObject({
+      id: MONO.sessionId,
+      title: "MonoCrab",
+      done: false,
+      mono: {
+        id: "crab",
+        mascot: "crab",
+        color: MONO.color,
+        leadId: MONO.sessionId,
+        sessionIds: [MONO.sessionId],
+      },
     });
-    const monoDone = chat("~", { id: "mono-done" });
-    const agents = liveAgentsFromSessions(
-      [monoWaiting, monoWorking, monoDone, done, working],
-      new Set([monoDone.id, done.id]),
-      new Set([monoWorking.id, monoWaiting.id, monoDone.id]),
+  });
+
+  it("folds the sessions a Mono started into its row", () => {
+    const app = launched("app-1", "/repo/optik", {
+      busy: true,
+      blocks: [
+        { id: "u1", role: "user", text: "go", startedAt: 1_000, appRequestId: "app-1" },
+        edit("t1"),
+      ],
+    });
+    const regular = chat("/repo/site", {
+      id: "regular",
+      busy: true,
+      blocks: [{ id: "u1", role: "user", text: "go", startedAt: 5_000 }],
+    });
+    const mono = monoChat([app]);
+    const agents = liveAgentsFromSessions([mono, app, regular], new Set(), [MONO]);
+    expect(agents.map((agent) => agent.id)).toEqual([MONO.sessionId, "regular"]);
+    expect(agents[0]).toMatchObject({
+      title: "MonoCrab",
+      cwd: "/repo/optik",
+      activity: "Edited src/App.tsx",
+      mono: { leadId: "app-1", sessionIds: ["app-1"] },
+    });
+    expect(agents[1].mono).toBeUndefined();
+  });
+
+  it("shows a started session the user took over in its project", () => {
+    const app = launched("app-1", "/repo/optik", {
+      busy: true,
+      blocks: [
+        { id: "u1", role: "user", text: "go", startedAt: 1_000, appRequestId: "app-1" },
+        { id: "u2", role: "user", text: "also the tests", startedAt: 2_000 },
+      ],
+    });
+    const agents = liveAgentsFromSessions([monoChat([app]), app], new Set(), [MONO]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ id: "app-1", cwd: "/repo/optik" });
+    expect(agents[0].mono).toBeUndefined();
+  });
+
+  it("leads with a started session that waits on the user", () => {
+    const app = launched("app-1", "/repo/optik", {
+      busy: true,
+      blocks: [
+        { id: "u1", role: "user", text: "go", startedAt: 1_000, appRequestId: "app-1" },
+        { id: "a1", role: "approval", text: "run rm", approval: { requestId: 1 } },
+      ],
+    });
+    const mono = monoChat([app], { busy: true });
+    const [row] = liveAgentsFromSessions([mono, app], new Set(), [MONO]);
+    expect(row).toMatchObject({
+      id: MONO.sessionId,
+      needsApproval: true,
+      mono: { leadId: "app-1", sessionIds: ["app-1", MONO.sessionId] },
+    });
+  });
+
+  it("is done only once every session it stands for is", () => {
+    const app = launched("app-1", "/repo/optik", { busy: true });
+    const mono = monoChat([app]);
+    const working = liveAgentsFromSessions(
+      [mono, app],
+      new Set([MONO.sessionId]),
+      [MONO],
     );
-    expect(agents.map((agent) => agent.id)).toEqual([working.id, done.id]);
-    expect(agents[1].done).toBe(true);
+    expect(working).toHaveLength(1);
+    expect(working[0]).toMatchObject({
+      done: false,
+      mono: { leadId: "app-1", sessionIds: ["app-1", MONO.sessionId] },
+    });
+
+    const finished = liveAgentsFromSessions(
+      [mono, { ...app, busy: false }],
+      new Set([MONO.sessionId, "app-1"]),
+      [MONO],
+    );
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ done: true, activity: "Done" });
+  });
+
+  it("lists a started session on its own while its Mono's chat is not loaded", () => {
+    const app = launched("app-1", "/repo/optik", { busy: true });
+    const agents = liveAgentsFromSessions([app], new Set(), [MONO]);
+    expect(agents.map((agent) => agent.id)).toEqual(["app-1"]);
+    expect(agents[0].mono).toBeUndefined();
   });
 
   it("keeps internal workers in their lead's agent panel", () => {

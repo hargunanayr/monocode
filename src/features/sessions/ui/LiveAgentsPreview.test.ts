@@ -170,6 +170,46 @@ describe("LiveAgentsPreview", () => {
     expect(clear()!.title).toBe("Clear all");
   });
 
+  it("sets a Mono's row apart from a project's", () => {
+    const mono = {
+      id: "crab",
+      name: "MonoCrab",
+      mascot: "crab",
+      color: "hsl(160 60% 50%)",
+    };
+    render({
+      agents: [
+        agent("mono-chat", "/repo/optik", {
+          title: "MonoCrab",
+          mono: { ...mono, leadId: "app-1", sessionIds: ["app-1", "mono-chat"] },
+        }),
+        agent("own", "~/.monocode/monos/crab", {
+          title: "MonoCrab",
+          mono: { ...mono, leadId: "own", sessionIds: ["own"] },
+        }),
+        agent("plain", "/repo/site"),
+      ],
+      groupLabels: { "/repo/optik": "Optik", "/repo/site": "Site" },
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    const card = (id: string) =>
+      container.querySelector<HTMLElement>(`[data-live-agent-card="${id}"]`)!;
+    expect(card("mono-chat").dataset.liveAgentKind).toBe("mono");
+    expect(card("mono-chat").style.getPropertyValue("--mono-color")).toBe(
+      mono.color,
+    );
+    expect(card("mono-chat").textContent).toContain("Mono");
+    // Led by a session it started: that session's project, and the rest.
+    expect(card("mono-chat").textContent).toContain("Optik +1");
+    // Led by its own chat, which works in no project.
+    expect(card("own").textContent).not.toContain("monos");
+    expect(card("plain").dataset.liveAgentKind).toBe("project");
+    expect(card("plain").textContent).not.toContain("Mono");
+  });
+
   it("keeps elapsed timers out of its live region", () => {
     render({
       agents: [agent("a", "/repo/a"), agent("b", "/repo/b")],

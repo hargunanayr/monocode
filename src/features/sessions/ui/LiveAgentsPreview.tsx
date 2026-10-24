@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
 import { projectKey, projectName } from "../../../shared/lib/paths";
@@ -165,10 +165,18 @@ function LiveAgentCard({
   groupCustomColors: Record<string, string>;
   groupMascots: Record<string, string>;
 }) {
+  const { mono } = agent;
   const seed = projectName(agent.cwd);
   const key = projectKey(agent.cwd);
-  const project = resolveTabGroupLabel(key, groupLabels, seed);
-  const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
+  // A Mono's chat lives in its own folder, so its row names a project only
+  // while a session it started leads.
+  const project =
+    mono?.leadId === agent.id
+      ? ""
+      : resolveTabGroupLabel(key, groupLabels, seed);
+  const color =
+    mono?.color ??
+    resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
   const elapsed = agent.done
     ? agent.durationMs != null
       ? formatLiveElapsed(0, agent.durationMs)
@@ -182,29 +190,46 @@ function LiveAgentCard({
       ? "Done"
       : agent.activity;
   const live = !agent.needsApproval && !agent.done;
-  const title = [agent.title, project, activity, elapsed]
-    .filter(Boolean)
-    .join("\n");
+  const others = mono ? mono.sessionIds.length - 1 : 0;
+  const details = [
+    agent.title,
+    mono ? "Mono" : undefined,
+    project,
+    activity,
+    elapsed,
+  ].filter(Boolean);
 
   return (
     <button
       type="button"
-      title={title}
-      aria-label={[agent.title, project, activity, elapsed]
-        .filter(Boolean)
-        .join(", ")}
+      title={details.join("\n")}
+      aria-label={details.join(", ")}
       aria-current={selected ? "true" : undefined}
       data-live-agent-card={agent.id}
+      data-live-agent-kind={mono ? "mono" : "project"}
       onClick={() => onSelect?.(agent.id)}
+      // A Mono's row is washed in its color, with a bar at its edge; a
+      // project's stays plain, so the two read apart at a glance.
+      style={mono ? ({ "--mono-color": mono.color } as CSSProperties) : undefined}
       className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
-        selected ? "bg-selection" : "hover:bg-content/8"
+        selected
+          ? "bg-selection"
+          : mono
+            ? "bg-[var(--mono-color)]/10 hover:bg-[var(--mono-color)]/15"
+            : "hover:bg-content/8"
       }`}
     >
+      {mono ? (
+        <span
+          aria-hidden
+          className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-[var(--mono-color)]"
+        />
+      ) : null}
       <span className="flex min-w-0 items-center gap-2">
         <ProjectMascot
-          project={seed}
+          project={mono ? mono.name : seed}
           color={color}
-          name={resolveTabGroupMascot(key, groupMascots)}
+          name={mono ? mono.mascot : resolveTabGroupMascot(key, groupMascots)}
           className="size-2 shrink-0"
           active={live}
         />
@@ -217,6 +242,11 @@ function LiveAgentCard({
             {agent.title}
           </span>
         )}
+        {mono ? (
+          <span className="shrink-0 rounded bg-[var(--mono-color)]/20 px-1 text-[10px] font-medium leading-4 text-[var(--mono-color)]">
+            Mono
+          </span>
+        ) : null}
       </span>
       <span
         className={`mt-1 flex min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight ${
@@ -238,7 +268,14 @@ function LiveAgentCard({
       </span>
       <span className="mt-1 flex min-w-0 items-center gap-1.5 pl-4 text-[11px] leading-tight text-content/45">
         <HarnessIcon harness={agent.harness} className="size-3 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{project}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {project}
+          {others > 0 ? (
+            <span className="text-content/35">
+              {project ? " " : ""}+{others}
+            </span>
+          ) : null}
+        </span>
         {elapsed ? (
           <span className="shrink-0 tabular-nums">{elapsed}</span>
         ) : null}

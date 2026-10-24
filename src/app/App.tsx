@@ -588,7 +588,10 @@ import {
   TranscriptPoolOutlet,
 } from "../features/sessions/ui/TranscriptPool";
 import { syncDockBadge } from "../features/notifications/model/dockBadge";
-import { liveAgentsFromSessions } from "../features/sessions/model/liveAgents";
+import {
+  liveAgentsFromSessions,
+  type LiveMono,
+} from "../features/sessions/model/liveAgents";
 import { hiddenApprovalNotices } from "../features/notifications/model/approvalToast";
 import { useSessionReminders } from "../features/notifications/hooks/useSessionReminders";
 import { ReminderNotices } from "../features/sessions/ui/ReminderNotices";
@@ -2462,20 +2465,34 @@ function Workspace({
     activeSessionId,
   );
 
+  const liveMonos = useMemo(
+    () =>
+      listMonos().flatMap((mono): LiveMono[] => {
+        if (!mono.sessionId) return [];
+        const look = monoLook(mono);
+        return [
+          {
+            id: mono.id,
+            sessionId: mono.sessionId,
+            name: look.name,
+            mascot: look.mascot,
+            color: look.color,
+          },
+        ];
+      }),
+    // The roster is read through its snapshot.
+    [monosSnap],
+  );
   const liveAgentRows = useMemo(
     () =>
       liveAgentsEnabled
         ? liveAgentsFromSessions(
             promptableSessions,
             unseenFinishedIds,
-            new Set(
-              listMonos().flatMap((mono) =>
-                mono.sessionId ? [mono.sessionId] : [],
-              ),
-            ),
+            liveMonos,
           )
         : [],
-    [liveAgentsEnabled, promptableSessions, unseenFinishedIds, monosSnap],
+    [liveAgentsEnabled, promptableSessions, unseenFinishedIds, liveMonos],
   );
   // Rebuilt for every streamed batch; identity only moves when a row does.
   const liveAgents = useStableValue(liveAgentRows);
@@ -12264,17 +12281,53 @@ function Workspace({
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
-      onOpenApprovalSession(sessionId);
+      const agent = liveAgents.find((row) => row.id === sessionId);
+      const mono = agent?.mono;
+      if (!mono) {
+        onOpenApprovalSession(sessionId);
+        return;
+      }
+      // A Mono's row opens the Mono, where what the row stood for is seen. A
+      // session it started that waits on the user opens over its overview,
+      // where it can be answered.
+      markFinishedSeen(mono.sessionIds);
+      void onOpenMono(mono.id).then(() => {
+        if (
+          agent.needsApproval &&
+          mono.leadId !== sessionId &&
+          shownMonoSessionIdRef.current !== mono.leadId
+        )
+          void showMonoLaunchedSession(sessionId, mono.leadId);
+      });
     },
-    [onOpenApprovalSession],
+    [
+      liveAgents,
+      markFinishedSeen,
+      onOpenApprovalSession,
+      onOpenMono,
+      showMonoLaunchedSession,
+    ],
   );
   const onClearFinishedAgents = useCallback(
     () =>
       markFinishedSeen(
-        liveAgents.filter((agent) => agent.done).map((agent) => agent.id),
+        liveAgents
+          .filter((agent) => agent.done)
+          .flatMap((agent) => agent.mono?.sessionIds ?? [agent.id]),
       ),
     [liveAgents, markFinishedSeen],
   );
+  // The Mono in view reports the sessions it started as they finish, so the
+  // Working list need not hold them, as it holds no session the user is on.
+  const monoInViewAgent = monoViewId
+    ? liveAgents.find((agent) => agent.id === monoViewId)?.mono
+    : undefined;
+  useLayoutEffect(() => {
+    const finished = monoInViewAgent?.sessionIds.filter((id) =>
+      unseenFinishedIds.has(id),
+    );
+    if (finished?.length) markFinishedSeen(finished);
+  }, [monoInViewAgent, unseenFinishedIds, markFinishedSeen]);
 
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
